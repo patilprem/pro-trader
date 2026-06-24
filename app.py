@@ -125,7 +125,7 @@ st.markdown("""
         transform: scale(1.02);
     }
 </style>
-""", unsafe_html=True)
+""", unsafe_allow_html=True)
 
 # ==============================================================================
 # SESSION STATE SINGLETON INITIALIZATION
@@ -150,7 +150,7 @@ ml_engine = st.session_state.ml_engine
 # SIDEBAR CONTROL PANEL
 # ==============================================================================
 with st.sidebar:
-    st.markdown("<h2 style='color:#00FFCC;'>🛠 CONTROL DESK</h2>", unsafe_html=True)
+    st.markdown("<h2 style='color:#00FFCC;'>🛠 CONTROL DESK</h2>", unsafe_allow_html=True)
     
     # 1. Operational Mode Selector
     mode_option = st.selectbox(
@@ -197,16 +197,16 @@ with st.sidebar:
 # ==============================================================================
 col_title, col_sync = st.columns([0.8, 0.2])
 with col_title:
-    st.markdown("<div class='neon-header'>PROTRADER ALGORITHMIC OPTIONS ENGINE</div>", unsafe_html=True)
-    st.markdown("<div class='neon-subheader'>Institutional Microstructure Order Flow & Live Volatility Skew Calibration</div>", unsafe_html=True)
+    st.markdown("<div class='neon-header'>PROTRADER ALGORITHMIC OPTIONS ENGINE</div>", unsafe_allow_html=True)
+    st.markdown("<div class='neon-subheader'>Institutional Microstructure Order Flow & Live Volatility Skew Calibration</div>", unsafe_allow_html=True)
 
 with col_sync:
     if router.kill_switch_tripped:
-        st.markdown("<div style='text-align: right;'><span class='sync-indicator-red'></span><span style='color:#FF3366;font-weight:bold;'>SYSTEM BLOCKED</span></div>", unsafe_html=True)
+        st.markdown("<div style='text-align: right;'><span class='sync-indicator-red'></span><span style='color:#FF3366;font-weight:bold;'>SYSTEM BLOCKED</span></div>", unsafe_allow_html=True)
     elif config.RUN_MODE == "SIMULATION":
-        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green'></span><span style='color:#00FFCC;font-weight:bold;'>SIMULATION FEED</span></div>", unsafe_html=True)
+        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green'></span><span style='color:#00FFCC;font-weight:bold;'>SIMULATION FEED</span></div>", unsafe_allow_html=True)
     else:
-        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green'></span><span style='color:#00FFCC;font-weight:bold;'>DHAN SYNC ACTIVE</span></div>", unsafe_html=True)
+        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green'></span><span style='color:#00FFCC;font-weight:bold;'>DHAN SYNC ACTIVE</span></div>", unsafe_allow_html=True)
 
 # Fetch latest ticks
 spot = feed.latest_spot
@@ -235,37 +235,37 @@ with k1:
         <div class='kpi-label'>Nifty Spot LTP</div>
         <div class='kpi-value'>{ltp_val:,.2f}</div>
     </div>
-    """, unsafe_html=True)
+    """, unsafe_allow_html=True)
 with k2:
     st.markdown(f"""
     <div class='kpi-card'>
         <div class='kpi-label'>Order Book Imbalance</div>
         <div class='kpi-value' style='color:{"#00FFCC" if imbalance_val >= 0 else "#FF3366"};'>{imbalance_val:+.2%}</div>
     </div>
-    """, unsafe_html=True)
+    """, unsafe_allow_html=True)
 with k3:
     st.markdown(f"""
     <div class='kpi-card'>
         <div class='kpi-label'>Active IV Rank</div>
         <div class='kpi-value'>{features[5]:.1%}</div>
     </div>
-    """, unsafe_html=True)
+    """, unsafe_allow_html=True)
 with k4:
     st.markdown(f"""
     <div class='kpi-card'>
         <div class='kpi-label'>ML Breakout Signal</div>
         <div class='kpi-value' style='color:#00FFCC;'>{breakout_prob:.1%}</div>
     </div>
-    """, unsafe_html=True)
+    """, unsafe_allow_html=True)
 with k5:
     st.markdown(f"""
     <div class='kpi-card'>
         <div class='kpi-label'>VWAP Proximity</div>
         <div class='kpi-value'>{features[8]:+.4%}</div>
     </div>
-    """, unsafe_html=True)
+    """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
 
 # ==============================================================================
 # MAIN TABS VIEW
@@ -349,14 +349,14 @@ with tab_insights:
             # Format and display side by side
             book_col1, book_col2 = st.columns(2)
             with book_col1:
-                st.markdown("<p style='color:#00FFCC;font-weight:bold;text-align:center;'>BUY BIDS</p>", unsafe_html=True)
+                st.markdown("<p style='color:#00FFCC;font-weight:bold;text-align:center;'>BUY BIDS</p>", unsafe_allow_html=True)
                 st.dataframe(
                     bids_df.style.format({"Price": "{:.2f}", "Bid Vol": "{:,.0f}"})
                                 .bar(subset=['Bid Vol'], color='rgba(0, 255, 204, 0.2)'),
                     use_container_width=True, hide_index=True
                 )
             with book_col2:
-                st.markdown("<p style='color:#FF3366;font-weight:bold;text-align:center;'>SELL ASKS</p>", unsafe_html=True)
+                st.markdown("<p style='color:#FF3366;font-weight:bold;text-align:center;'>SELL ASKS</p>", unsafe_allow_html=True)
                 st.dataframe(
                     asks_df.style.format({"Price": "{:.2f}", "Ask Vol": "{:,.0f}"})
                                 .bar(subset=['Ask Vol'], color='rgba(255, 51, 102, 0.2)'),
@@ -510,7 +510,7 @@ with tab_ledger:
             pnl_style = "pnl-positive" if pnl_val >= 0 else "pnl-negative"
             
             st.table(pd.DataFrame(pos_data))
-            st.markdown(f"#### Real-time Net Profit/Loss: <span class='{pnl_style}'>₹ {pnl_val:+.2f}</span>", unsafe_html=True)
+            st.markdown(f"#### Real-time Net Profit/Loss: <span class='{pnl_style}'>₹ {pnl_val:+.2f}</span>", unsafe_allow_html=True)
             
             # Progress bar for Target Proximity
             progress_pct = (active_pos["ltp"] - active_pos["stop_loss"]) / (active_pos["target"] - active_pos["stop_loss"])
@@ -535,13 +535,13 @@ with tab_ledger:
         st.markdown("### System Security Controls")
         
         # Giant Emergency Crimson Kill Switch
-        st.markdown("<div class='panic-button'>", unsafe_html=True)
+        st.markdown("<div class='panic-button'>", unsafe_allow_html=True)
         if st.button("🔥 PANIC CLOSE ALL\nEMERGENCY STOP", key="ledger_kill", use_container_width=True):
             router.trigger_emergency_kill()
             st.error("EMERGENCY KILL SWITCH TRIPPED. Positions flattened immediately. System locked.")
-        st.markdown("</div>", unsafe_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
         
-        st.markdown("<br>", unsafe_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
         
         # Lockout Info Box
         if router.kill_switch_tripped:
