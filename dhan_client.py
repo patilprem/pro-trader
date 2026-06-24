@@ -418,8 +418,25 @@ class DhanFeedEngine:
             self.start()
             return
         
-        # Initialize REST client
-        dhan_rest = dhan_api(config.DHAN_CLIENT_ID, config.DHAN_ACCESS_TOKEN)
+        # Initialize REST client defensively using keyword arguments
+        try:
+            dhan_rest = dhan_api(
+                client_id=config.DHAN_CLIENT_ID,
+                access_token=config.DHAN_ACCESS_TOKEN
+            )
+        except TypeError:
+            try:
+                dhan_rest = dhan_api(config.DHAN_CLIENT_ID, config.DHAN_ACCESS_TOKEN)
+            except Exception as e:
+                print(f"[ERROR] Failed to initialize Dhan API client: {e}. Reverting to Simulation mode.")
+                config.RUN_MODE = "SIMULATION"
+                self.start()
+                return
+        except Exception as e:
+            print(f"[ERROR] Failed to initialize Dhan API client: {e}. Reverting to Simulation mode.")
+            config.RUN_MODE = "SIMULATION"
+            self.start()
+            return
         
         def live_run():
             try:
