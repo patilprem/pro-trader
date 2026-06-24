@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -813,8 +813,11 @@ with tab_strategy:
     
     # DuckDB connector - always use the dedicated backtest DB
     import duckdb
-    
-    # Check if backtest table exists and has rows
+
+    # Guard: only auto-run backtest ONCE per Streamlit session, not on every rerender
+    if "backtest_initialized" not in st.session_state:
+        st.session_state["backtest_initialized"] = False
+
     table_exists = False
     try:
         _chk = duckdb.connect(config.BACKTEST_DB_PATH)
@@ -822,21 +825,25 @@ with tab_strategy:
         _chk.close()
         if count > 0:
             table_exists = True
+            st.session_state["backtest_initialized"] = True
     except Exception:
         pass
-        
-    if not table_exists:
-        with st.spinner("Initializing performance data and running first-time backtest..."):
+
+    if not table_exists and not st.session_state["backtest_initialized"]:
+        with st.spinner("Running first-time backtest -- completes in ~5 seconds..."):
             from backtester import OptionsBacktester
             bt = OptionsBacktester(config.BACKTEST_DB_PATH)
             bt.run_backtest(probability_threshold=0.58)
-    
-    # Re-open fresh connection AFTER backtest may have just populated the DB
+            st.session_state["backtest_initialized"] = True
+
+    # Fresh connection after backtest may have populated the DB
     con = duckdb.connect(config.BACKTEST_DB_PATH)
     trades_list = []
     try:
         trades_list = con.execute("""
-            SELECT timestamp, entry_time, contract, strike, option_type, entry_price, exit_price, quantity, pnl, outcome, capital, allocation_pct
+            SELECT timestamp, entry_time, contract, strike, option_type,
+                   entry_price, exit_price, quantity, pnl, outcome,
+                   capital, allocation_pct
             FROM options_buying_trades
             ORDER BY timestamp ASC
         """).fetchall()
