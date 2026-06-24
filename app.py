@@ -533,7 +533,7 @@ with tab_calibration:
         
         if st.button("🎯 Execute Performance Backtest", use_container_width=True):
             with st.spinner("Bootstrapping database and running bar-by-bar backtest..."):
-                bt = OptionsBacktester(config.DUCKDB_PATH)
+                bt = OptionsBacktester(config.BACKTEST_DB_PATH)
                 # Pass credentials if configured to fetch real historical minute candles
                 c_id = config.DHAN_CLIENT_ID if config.RUN_MODE == "LIVE" else None
                 a_token = config.DHAN_ACCESS_TOKEN if config.RUN_MODE == "LIVE" else None
@@ -811,14 +811,15 @@ with tab_strategy:
     st.markdown("---")
     st.markdown("### 📅 Backtesting Performance Calendar View")
     
-    # DuckDB connector
+    # DuckDB connector - always use the dedicated backtest DB
     import duckdb
-    con = duckdb.connect(config.DUCKDB_PATH)
     
-    # Check if table exists and has rows
+    # Check if backtest table exists and has rows
     table_exists = False
     try:
-        count = con.execute("SELECT COUNT(*) FROM options_buying_trades").fetchone()[0]
+        _chk = duckdb.connect(config.BACKTEST_DB_PATH)
+        count = _chk.execute("SELECT COUNT(*) FROM options_buying_trades").fetchone()[0]
+        _chk.close()
         if count > 0:
             table_exists = True
     except Exception:
@@ -827,15 +828,20 @@ with tab_strategy:
     if not table_exists:
         with st.spinner("Initializing performance data and running first-time backtest..."):
             from backtester import OptionsBacktester
-            bt = OptionsBacktester(config.DUCKDB_PATH)
+            bt = OptionsBacktester(config.BACKTEST_DB_PATH)
             bt.run_backtest(probability_threshold=0.58)
-            
-    # Fetch trades
-    trades_list = con.execute("""
-        SELECT timestamp, entry_time, contract, strike, option_type, entry_price, exit_price, quantity, pnl, outcome, capital, allocation_pct
-        FROM options_buying_trades
-        ORDER BY timestamp ASC
-    """).fetchall()
+    
+    # Re-open fresh connection AFTER backtest may have just populated the DB
+    con = duckdb.connect(config.BACKTEST_DB_PATH)
+    trades_list = []
+    try:
+        trades_list = con.execute("""
+            SELECT timestamp, entry_time, contract, strike, option_type, entry_price, exit_price, quantity, pnl, outcome, capital, allocation_pct
+            FROM options_buying_trades
+            ORDER BY timestamp ASC
+        """).fetchall()
+    except Exception:
+        pass
     con.close()
     
     trades = []

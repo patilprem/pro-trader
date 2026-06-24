@@ -32,6 +32,8 @@ TRADING_WINDOW_END = "15:00:00"    # 30 minutes before close (15:30:00)
 # Base directory for storage
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DUCKDB_PATH = os.path.join(BASE_DIR, "options_trading.db")
+# Separate DB for the backtester so live feed data never pollutes backtest ticks
+BACKTEST_DB_PATH = os.path.join(BASE_DIR, "backtest.db")
 MODEL_PATH = os.path.join(BASE_DIR, "model_weights.pkl")
 
 # ML Feature list matching the institutional edges

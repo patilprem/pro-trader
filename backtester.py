@@ -65,20 +65,37 @@ def get_nse_option_symbol(symbol: str, expiry_date: datetime.date, strike: float
 # ==============================================================================
 
 class OptionsBacktester:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.ml_engine = MLEngine(db_path)
+    def __init__(self, db_path: str = None):
+        # Default to the dedicated backtest database, never the live feed DB
+        self.db_path = db_path if db_path else config.BACKTEST_DB_PATH
+        self.ml_engine = MLEngine(self.db_path)
         self.starting_capital = 500000.0  # 5 Lakh INR
 
     def bootstrap_historical_data(self, days: int = 30):
-        """Bootstraps realistic mock data in DuckDB for backtesting if database is empty."""
+        """Bootstraps realistic mock data in a dedicated backtest DuckDB. Always regenerates."""
         con = duckdb.connect(self.db_path)
-        count = con.execute("SELECT COUNT(*) FROM spot_data").fetchone()[0]
-        if count > 1000:
-            con.close()
-            return
         
-        print(f"[BACKTESTER] Bootstrapping June 2026 historical market depth data...")
+        # Ensure the required tables exist in the backtest DB
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS spot_data (
+                timestamp TIMESTAMP, symbol VARCHAR, ltp DOUBLE, volume DOUBLE, vwap DOUBLE
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS order_book (
+                timestamp TIMESTAMP, symbol VARCHAR, ltp DOUBLE,
+                bid_imbalance DOUBLE, density DOUBLE, bid_wall_ratio DOUBLE, ask_wall_ratio DOUBLE
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS option_chain (
+                timestamp TIMESTAMP, symbol VARCHAR, strike DOUBLE, option_type VARCHAR,
+                ltp DOUBLE, iv DOUBLE, delta DOUBLE, gamma DOUBLE, vega DOUBLE, theta DOUBLE,
+                oi DOUBLE, volume DOUBLE
+            )
+        """)
+        
+        # Always wipe and regenerate so stale after-hours live-feed data never blocks the backtest
         con.execute("DELETE FROM spot_data")
         con.execute("DELETE FROM order_book")
         con.execute("DELETE FROM option_chain")
