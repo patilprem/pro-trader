@@ -418,21 +418,70 @@ class DhanFeedEngine:
             self.start()
             return
         
-        # Establish connection using Dhan MarketFeed API
-        # To adapt to the environment, we register connection details and callbacks
-        # We start the listener inside a background thread.
+        # Initialize REST client
+        dhan_rest = dhan_api(config.DHAN_CLIENT_ID, config.DHAN_ACCESS_TOKEN)
+        
         def live_run():
             try:
-                instruments = [{"exchange_segment": "NSE_EQ", "security_id": "11536"}] # Nifty 50 ID example
+                # Default: always subscribe to Nifty 50 Spot Index (Security ID: 13, Segment: IDX_I)
+                instruments = [{"exchange_segment": "IDX_I", "security_id": "13"}]
                 
+                # Fetch next Thursday's expiry date dynamically
+                today = datetime.date.today()
+                days_ahead = 3 - today.weekday()
+                if days_ahead < 0:
+                    days_ahead += 7
+                # Rollover to next week if today is Thursday after 3:30 PM
+                now_dt = datetime.datetime.now()
+                if today.weekday() == 3 and now_dt.time() >= datetime.time(15, 30):
+                    days_ahead += 7
+                
+                next_thursday = today + datetime.timedelta(days=days_ahead)
+                expiry_str = next_thursday.strftime("%Y-%m-%d")
+                
+                try:
+                    print(f"[LIVE] Querying option chain for NIFTY-50 (expiry: {expiry_str})...")
+                    response = dhan_rest.get_option_chain(
+                        underlying_security_id="13",
+                        underlying_type="INDEX",
+                        expiry_date=expiry_str
+                    )
+                    
+                    if response.get("status") == "success" or "data" in response:
+                        data = response.get("data", response)
+                        chain_data = data.get("option_chain", data.get("optionChain", []))
+                        
+                        # Find spot estimate from a quick market quote
+                        spot_est = 22000.0
+                        try:
+                            q_resp = dhan_rest.get_market_quote(
+                                instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
+                            )
+                            if q_resp.get("status") == "success" and "data" in q_resp:
+                                spot_est = float(q_resp["data"]["13"]["last_price"])
+                        except Exception:
+                            pass
+                            
+                        # Sort by closeness to spot
+                        chain_data.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 22000.0))) - spot_est))
+                        
+                        # Take 8 nearest strikes
+                        for item in chain_data[:8]:
+                            ce_id = item.get("call_option", {}).get("security_id", item.get("callOption", {}).get("securityId"))
+                            pe_id = item.get("put_option", {}).get("security_id", item.get("putOption", {}).get("securityId"))
+                            if ce_id:
+                                instruments.append({"exchange_segment": "NSE_FNO", "security_id": str(ce_id)})
+                            if pe_id:
+                                instruments.append({"exchange_segment": "NSE_FNO", "security_id": str(pe_id)})
+                        print(f"[LIVE] Option chain subscription compiled: {len(instruments) - 1} options added.")
+                except Exception as e:
+                    print(f"[LIVE] Option chain query failed: {e}. Subscribing to spot index only.")
+
                 def on_connect(instance):
-                    print("[LIVE CONNECT] Connected to Dhan Market Feed.")
+                    print(f"[LIVE CONNECT] Connected to Dhan Market Feed. Subscribing to {len(instruments)} instruments...")
                     instance.subscribe_instruments(instruments)
 
                 def on_message(instance, message):
-                    # In real mode, parse the incoming Dhan binary package
-                    # Write to database, compute greeks, imbalance, and update state machine
-                    # Due to sandbox limits, this mock structure mimics live stream parsing
                     self._parse_live_packet(message)
 
                 feed = marketfeed.MarketFeed(
@@ -476,9 +525,9 @@ class DhanFeedEngine:
         security_id = str(message.get("security_id", message.get("securityId", "")))
         segment = str(message.get("exchange_segment", message.get("exchangeSegment", "")))
         
-        # 1. Handle Spot Index (Nifty 50 Spot security ID is typically '11536' or '999920')
-        is_spot = (segment == "NSE_EQ" or segment == "IDX" or "STRIKE" not in security_id) and \
-                  (security_id == "11536" or security_id == "999920" or "NIFTY" in security_id)
+        # 1. Handle Spot Index (Nifty 50 Spot security ID is typically '13', '11536' or '999920')
+        is_spot = (segment == "NSE_EQ" or segment == "IDX" or segment == "IDX_I" or "STRIKE" not in security_id) and \
+                  (security_id == "13" or security_id == "11536" or security_id == "999920" or "NIFTY" in security_id)
         
         ltp = float(message.get("ltp", message.get("last_traded_price", message.get("lastPrice", 0.0))))
         volume = float(message.get("volume", message.get("volume_traded", message.get("volumeTraded", 0.0))))
