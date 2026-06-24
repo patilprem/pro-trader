@@ -1,0 +1,17 @@
+# Python build files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Database & ML weights
+*.db
+*.db.tmp
+options_trading.db
+model_weights.pkl
+
+# IDE and system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
