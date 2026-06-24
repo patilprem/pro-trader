@@ -406,21 +406,13 @@ class DhanFeedEngine:
 
     def start(self):
         self.running = True
+        self.market_closed_override = False
         
-        # Enforce rule: Live feed only if market is open
-        market_is_open = self.is_market_open_ist()
-        
-        if config.RUN_MODE == "LIVE" and not market_is_open:
-            print("[FEED ENGINE] Live mode selected but Indian Market is closed. Automatically falling back to SIMULATION.")
-            self.market_closed_override = True
-            self.thread = threading.Thread(target=self._run_simulator, daemon=True)
-            self.thread.start()
-        elif config.RUN_MODE == "SIMULATION":
-            self.market_closed_override = False
+        if config.RUN_MODE == "SIMULATION":
             self.thread = threading.Thread(target=self._run_simulator, daemon=True)
             self.thread.start()
         else:
-            self.market_closed_override = False
+            # RUN_MODE == "LIVE"
             self._start_live_feed()
 
     def stop(self):
@@ -584,6 +576,14 @@ class DhanFeedEngine:
                 # Fetch closing quotes via REST immediately before WebSocket starts (for after-hours display)
                 self._initialize_live_data_from_rest(dhan_rest, expiry_str)
                 
+                # Check if market is open before starting the WebSocket thread
+                if not self.is_market_open_ist():
+                    print("[LIVE] Market is closed. Loaded real closing prices. Skipping live WebSocket stream.")
+                    self.market_closed_override = True
+                    return
+                
+                self.market_closed_override = False
+                
                 try:
                     print(f"[LIVE] Querying option chain for NIFTY-50 (expiry: {expiry_str})...")
                     response = dhan_rest.get_option_chain(
@@ -646,7 +646,7 @@ class DhanFeedEngine:
             except Exception as e:
                 print(f"[LIVE DISCONNECT] WebSocket crashed: {e}. Reconnecting in 5s...")
                 time.sleep(5.0)
-                if self.running:
+                if self.running and self.is_market_open_ist():
                     self._start_live_feed()
 
         self.thread = threading.Thread(target=live_run, daemon=True)

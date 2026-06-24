@@ -203,8 +203,8 @@ with col_title:
 with col_sync:
     if router.kill_switch_tripped:
         st.markdown("<div style='text-align: right;'><span class='sync-indicator-red'></span><span style='color:#FF3366;font-weight:bold;'>SYSTEM BLOCKED</span></div>", unsafe_allow_html=True)
-    elif getattr(feed, "market_closed_override", False):
-        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green' style='background-color:#FF9800;'></span><span style='color:#FF9800;font-weight:bold;'>MARKET CLOSED</span></div>", unsafe_allow_html=True)
+    elif getattr(feed, "market_closed_override", False) and config.RUN_MODE == "LIVE":
+        st.markdown("<div style='text-align: right;'><span class='sync-indicator-green' style='background-color:#FF9800;'></span><span style='color:#FF9800;font-weight:bold;'>DHAN LIVE (CLOSED)</span></div>", unsafe_allow_html=True)
     elif config.RUN_MODE == "SIMULATION":
         st.markdown("<div style='text-align: right;'><span class='sync-indicator-green'></span><span style='color:#00FFCC;font-weight:bold;'>SIMULATION FEED</span></div>", unsafe_allow_html=True)
     else:
@@ -217,7 +217,10 @@ chain = feed.latest_option_chain
 
 # Display warning banner if market closed override is active
 if getattr(feed, "market_closed_override", False):
-    st.warning("⚠️ Market is currently CLOSED (After-Hours). The engine has automatically reverted to Simulation Mode so you can see live moving charts, simulate order flows, and test backend strategies.")
+    if config.RUN_MODE == "LIVE":
+        st.info("📊 Indian Stock Market is currently CLOSED (After-Hours). Displaying actual market closing prices fetched from Dhan REST APIs.")
+    else:
+        st.warning("⚠️ Market is currently CLOSED (After-Hours). The engine has automatically reverted to Simulation Mode so you can see live moving charts, simulate order flows, and test backend strategies.")
 
 # Default fallback values if feed has not loaded first tick yet
 ltp_val = spot.get("ltp", 22000.0)
