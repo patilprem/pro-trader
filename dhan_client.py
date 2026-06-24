@@ -373,10 +373,10 @@ class DhanFeedEngine:
     def __init__(self, db_manager: DuckDBManager, execution_router: TradeExecutionRouter):
         self.db = db_manager
         self.router = execution_router
-        self.spot_price = 22000.0
-        self.vwap = 22000.0
+        self.spot_price = 24021.65
+        self.vwap = 24021.65
         self.cum_vol = 100000.0
-        self.cum_pv = 22000.0 * 100000.0
+        self.cum_pv = 24021.65 * 100000.0
         self.last_update_time = time.time()
         self.running = False
         self.thread: Optional[threading.Thread] = None
@@ -436,16 +436,16 @@ class DhanFeedEngine:
         print("[LIVE] Fetching latest market closing quotes via REST API...")
         
         # 1. Fetch Spot Index (Nifty 50 Index)
-        spot_price = 22000.0
-        vwap = 22000.0
+        spot_price = 24021.65
+        vwap = 24021.65
         volume = 0.0
         try:
             q_resp = dhan_rest.get_market_quote(
                 instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
             )
             if q_resp.get("status") == "success" and "data" in q_resp:
-                spot_data = q_resp["data"].get("13", {})
-                spot_price = float(spot_data.get("last_price", spot_data.get("lastPrice", 22000.0)))
+                spot_data = q_resp["data"].get("13", q_resp["data"].get(13, {}))
+                spot_price = float(spot_data.get("last_price", spot_data.get("lastPrice", 24021.65)))
                 vwap = float(spot_data.get("average_price", spot_data.get("averagePrice", spot_price)))
                 volume = float(spot_data.get("volume", spot_data.get("volume_traded", 0.0)))
                 
@@ -602,18 +602,19 @@ class DhanFeedEngine:
                         chain_data = data.get("option_chain", data.get("optionChain", []))
                         
                         # Find spot estimate from a quick market quote
-                        spot_est = 22000.0
+                        spot_est = 24021.65
                         try:
                             q_resp = dhan_rest.get_market_quote(
                                 instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
                             )
                             if q_resp.get("status") == "success" and "data" in q_resp:
-                                spot_est = float(q_resp["data"]["13"]["last_price"])
+                                spot_data = q_resp["data"].get("13", q_resp["data"].get(13, {}))
+                                spot_est = float(spot_data.get("last_price", spot_data.get("lastPrice", 24021.65)))
                         except Exception:
                             pass
                             
                         # Sort by closeness to spot
-                        chain_data.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 22000.0))) - spot_est))
+                        chain_data.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 24021.65))) - spot_est))
                         
                         # Take 8 nearest strikes
                         for item in chain_data[:8]:

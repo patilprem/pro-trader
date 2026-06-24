@@ -223,8 +223,8 @@ if getattr(feed, "market_closed_override", False):
         st.warning("⚠️ Market is currently CLOSED (After-Hours). The engine has automatically reverted to Simulation Mode so you can see live moving charts, simulate order flows, and test backend strategies.")
 
 # Default fallback values if feed has not loaded first tick yet
-ltp_val = spot.get("ltp", 22000.0)
-vwap_val = spot.get("vwap", 22000.0)
+ltp_val = spot.get("ltp", 24021.65)
+vwap_val = spot.get("vwap", 24021.65)
 imbalance_val = depth.get("imbalance", 0.0)
 density_val = depth.get("density", 0.0)
 bid_wall_val = depth.get("bid_wall_ratio", 0.0)
@@ -571,7 +571,7 @@ with tab_ledger:
         
         inject_col1, inject_col2 = st.columns(2)
         with inject_col1:
-            strike_inject = st.number_input("Strike", value=22000, step=50)
+            strike_inject = st.number_input("Strike", value=24000, step=50)
             type_inject = st.selectbox("Option Type", ["CE", "PE"])
         with inject_col2:
             entry_inject = st.number_input("Entry Price", value=150.0, step=5.0)

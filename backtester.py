@@ -70,7 +70,7 @@ class OptionsBacktester:
         
         # Start 5 days ago
         base_time = datetime.datetime.now() - datetime.timedelta(days=days)
-        spot = 22000.0
+        spot = 24021.65
         
         for d in range(days):
             current_day = base_time + datetime.timedelta(days=d)
@@ -238,11 +238,11 @@ class OptionsBacktester:
                 
                 # Sort by ATM proximity
                 spot_now = float(closes[-1])
-                chain_list.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 22000.0))) - spot_now))
+                chain_list.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 24021.65))) - spot_now))
                 
                 # Select nearest ATM strike
                 atm_item = chain_list[0]
-                strike = float(atm_item.get("strike_price", atm_item.get("strikePrice", 22000.0)))
+                strike = float(atm_item.get("strike_price", atm_item.get("strikePrice", 24021.65)))
                 
                 ce_id = atm_item.get("call_option", {}).get("security_id", atm_item.get("callOption", {}).get("securityId"))
                 pe_id = atm_item.get("put_option", {}).get("security_id", atm_item.get("putOption", {}).get("securityId"))
