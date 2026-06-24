@@ -45,6 +45,21 @@ def calculate_transaction_costs(
     return brokerage, stt, exchange_charges, gst, stamp_duty, total_cost
 
 
+def get_nse_option_symbol(symbol: str, expiry_date: datetime.date, strike: float, option_type: str) -> str:
+    """Generates standard NSE option contract name (e.g. NIFTY2661623900CE)."""
+    year_str = expiry_date.strftime("%y")
+    # Single digit or letter month
+    month_char = str(expiry_date.month)
+    if expiry_date.month == 10:
+        month_char = "O"
+    elif expiry_date.month == 11:
+        month_char = "N"
+    elif expiry_date.month == 12:
+        month_char = "D"
+    day_str = expiry_date.strftime("%d")
+    strike_str = str(int(strike))
+    return f"{symbol}{year_str}{month_char}{day_str}{strike_str}{option_type}"
+
 # ==============================================================================
 # EVENT-DRIVEN BACKTESTER ENGINE
 # ==============================================================================
@@ -55,7 +70,7 @@ class OptionsBacktester:
         self.ml_engine = MLEngine(db_path)
         self.starting_capital = 500000.0  # 5 Lakh INR
 
-    def bootstrap_historical_data(self, days: int = 5):
+    def bootstrap_historical_data(self, days: int = 20):
         """Bootstraps realistic mock data in DuckDB for backtesting if database is empty."""
         con = duckdb.connect(self.db_path)
         count = con.execute("SELECT COUNT(*) FROM spot_data").fetchone()[0]
@@ -68,7 +83,7 @@ class OptionsBacktester:
         con.execute("DELETE FROM order_book")
         con.execute("DELETE FROM option_chain")
         
-        # Start 5 days ago
+        # Start days ago
         base_time = datetime.datetime.now() - datetime.timedelta(days=days)
         spot = 24021.65
         
@@ -328,6 +343,25 @@ class OptionsBacktester:
         
         con = duckdb.connect(self.db_path)
         
+        # Initialize and wipe the options buying trades table
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS options_buying_trades (
+                timestamp TIMESTAMP,
+                entry_time TIMESTAMP,
+                contract VARCHAR,
+                strike DOUBLE,
+                option_type VARCHAR,
+                entry_price DOUBLE,
+                exit_price DOUBLE,
+                quantity INTEGER,
+                pnl DOUBLE,
+                outcome VARCHAR,
+                capital DOUBLE,
+                allocation_pct DOUBLE
+            )
+        """)
+        con.execute("DELETE FROM options_buying_trades")
+        
         # Load timeseries ticks
         ticks = con.execute("""
             SELECT s.timestamp, s.ltp, s.vwap, s.volume, o.bid_imbalance, o.density, o.bid_wall_ratio, o.ask_wall_ratio
@@ -344,14 +378,21 @@ class OptionsBacktester:
         trades = []
         
         active_trade = None
+        current_date = None
+        trades_today = 0
         
         print(f"[BACKTESTER] Initiating backtest. Starting Capital: {capital:.2f} INR")
         
         for idx in range(10, len(ticks)):
             t_curr, spot, vwap, vol, imbalance, density, bid_wall, ask_wall = ticks[idx]
             
+            # Reset daily trades counter
+            t_date = t_curr.date()
+            if current_date != t_date:
+                current_date = t_date
+                trades_today = 0
+            
             # Simple feature construction for the model prediction
-            # Calculate mock skew & IV rank to fit ml_engine requirements
             iv_skew = 0.01 + 0.02 * math.sin(spot / 100.0)
             iv_rank = 0.5 + 0.1 * math.cos(spot / 50.0)
             pcr_div = 0.02 * math.sin(idx / 10.0)
@@ -404,6 +445,26 @@ class OptionsBacktester:
                         "pnl": net_pnl,
                         "outcome": "LOSS"
                     })
+                    
+                    # Record to DuckDB
+                    con.execute("""
+                        INSERT INTO options_buying_trades 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        t_curr,
+                        active_trade["entry_time"],
+                        active_trade["contract"],
+                        active_trade["strike"],
+                        active_trade["type"],
+                        active_trade["entry_price"],
+                        exit_price,
+                        active_trade["qty"],
+                        net_pnl,
+                        "LOSS",
+                        active_trade["capital"],
+                        active_trade["allocation_pct"]
+                    ))
+                    
                     active_trade = None
                     
                 elif opt_price >= active_trade["target"]:
@@ -425,6 +486,26 @@ class OptionsBacktester:
                         "pnl": net_pnl,
                         "outcome": "WIN"
                     })
+                    
+                    # Record to DuckDB
+                    con.execute("""
+                        INSERT INTO options_buying_trades 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        t_curr,
+                        active_trade["entry_time"],
+                        active_trade["contract"],
+                        active_trade["strike"],
+                        active_trade["type"],
+                        active_trade["entry_price"],
+                        exit_price,
+                        active_trade["qty"],
+                        net_pnl,
+                        "WIN",
+                        active_trade["capital"],
+                        active_trade["allocation_pct"]
+                    ))
+                    
                     active_trade = None
                     
                 elif t_curr.time() >= datetime.time(15, 0):
@@ -446,6 +527,26 @@ class OptionsBacktester:
                         "pnl": net_pnl,
                         "outcome": "MIS_CLEAR"
                     })
+                    
+                    # Record to DuckDB
+                    con.execute("""
+                        INSERT INTO options_buying_trades 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        t_curr,
+                        active_trade["entry_time"],
+                        active_trade["contract"],
+                        active_trade["strike"],
+                        active_trade["type"],
+                        active_trade["entry_price"],
+                        exit_price,
+                        active_trade["qty"],
+                        net_pnl,
+                        "MIS_CLEAR",
+                        active_trade["capital"],
+                        active_trade["allocation_pct"]
+                    ))
+                    
                     active_trade = None
             
             # Entry Signal Check
@@ -453,15 +554,20 @@ class OptionsBacktester:
                 # Time validation (restrict open/close zones)
                 is_valid_time = datetime.time(9, 45) <= t_curr.time() <= datetime.time(15, 0)
                 
-                if is_valid_time and prob >= probability_threshold:
+                # Check highly accurate options buying entry triggers (limit to 3 trades per day)
+                if is_valid_time and prob >= probability_threshold and trades_today < 3:
                     # Prop Trading Microstructure filters:
-                    # Only buy CALL if bid walls > ask walls, indicating institutional buying base.
-                    # Only buy PUT if ask walls > bid walls, indicating institutional selling cap.
-                    opt_type = "CE" if bid_wall > ask_wall else "PE"
+                    # Buy CALL only if bid walls > ask walls and bid imbalance is positive
+                    # Buy PUT only if ask walls > bid walls and bid imbalance is negative
+                    if bid_wall > ask_wall and imbalance > 0.15:
+                        opt_type = "CE"
+                    elif ask_wall > bid_wall and imbalance < -0.15:
+                        opt_type = "PE"
+                    else:
+                        continue
                     
-                    # Determine target strike
+                    # Determine target strike (ATM option)
                     strike = round(spot / 50.0) * 50
-                    strike = (strike + 50) if opt_type == "CE" else (strike - 50)
                     
                     # Calculate BS premium
                     expiry_dt = datetime.datetime.combine(t_curr.date(), datetime.time(15, 30))
@@ -470,6 +576,7 @@ class OptionsBacktester:
                     opt_price, _, _, _, _ = black_scholes_greeks(spot, strike, rem_t, 0.07, 0.15, opt_type)
                     
                     if opt_price > 5.0:  # avoid illiquid zero value options
+                        # Fix position sizing: 5 lots = 250 contracts
                         qty = config.TRADE_LOTS * config.LOT_SIZE # 250 contracts
                         
                         # Apply slippage on entry execution
@@ -478,8 +585,11 @@ class OptionsBacktester:
                         
                         _, _, _, _, _, entry_costs = calculate_transaction_costs(entry_price, qty, "BUY")
                         
+                        # Tight exit bounds for options buying
                         stop_loss = entry_price * (1.0 - config.STOP_LOSS_PCT)
                         target = entry_price * (1.0 + config.TARGET_PCT)
+                        
+                        contract_name = get_nse_option_symbol("NIFTY", expiry_dt.date(), strike, opt_type)
                         
                         active_trade = {
                             "entry_time": t_curr,
@@ -490,8 +600,12 @@ class OptionsBacktester:
                             "entry_costs": entry_costs,
                             "stop_loss": stop_loss,
                             "target": target,
-                            "rem_t": rem_t
+                            "rem_t": rem_t,
+                            "contract": contract_name,
+                            "capital": capital,
+                            "allocation_pct": (entry_price * qty) / capital * 100
                         }
+                        trades_today += 1
             
             # Log equity tick hourly / daily
             if idx % 120 == 0 or idx == len(ticks) - 1:
@@ -499,7 +613,6 @@ class OptionsBacktester:
                     "timestamp": t_curr.strftime("%Y-%m-%d %H:%M"),
                     "equity": capital
                 })
-
         con.close()
         
         # Calculate backtest performance stats

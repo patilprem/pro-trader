@@ -285,10 +285,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ==============================================================================
 # MAIN TABS VIEW
 # ==============================================================================
-tab_insights, tab_calibration, tab_ledger = st.tabs([
+tab_insights, tab_calibration, tab_ledger, tab_strategy = st.tabs([
     "📊 LIVE INSIGHTS PANEL",
     "🧠 MODEL CALIBRATION DESK",
-    "🚨 LIVE OPERATIONS LEDGER"
+    "🚨 LIVE OPERATIONS LEDGER",
+    "📈 STRATEGY PERFORMANCE"
 ])
 
 # ------------------------------------------------------------------------------
@@ -589,6 +590,334 @@ with tab_ledger:
                 st.success("Trade injected successfully!")
             else:
                 st.error("Failed to inject trade. Check system lock / time window.")
+
+
+# ------------------------------------------------------------------------------
+# PANE D: STRATEGY PERFORMANCE TAB
+# ------------------------------------------------------------------------------
+with tab_strategy:
+    st.markdown("<h2 style='color:#00FFCC;'>📈 Nifty Options Buying Strategy Performance</h2>", unsafe_allow_html=True)
+    st.markdown("<b>Execution settings: 5 Lots (250 contracts), ₹5 Lakhs Starting Capital</b>", unsafe_allow_html=True)
+    
+    # DuckDB connector
+    import duckdb
+    con = duckdb.connect(config.DUCKDB_PATH)
+    
+    # Check if table exists and has rows
+    table_exists = False
+    try:
+        count = con.execute("SELECT COUNT(*) FROM options_buying_trades").fetchone()[0]
+        if count > 0:
+            table_exists = True
+    except Exception:
+        pass
+        
+    if not table_exists:
+        with st.spinner("Initializing performance data and running first-time backtest..."):
+            from backtester import OptionsBacktester
+            bt = OptionsBacktester(config.DUCKDB_PATH)
+            bt.run_backtest(probability_threshold=0.58)
+            
+    # Fetch trades
+    trades_list = con.execute("""
+        SELECT timestamp, entry_time, contract, strike, option_type, entry_price, exit_price, quantity, pnl, outcome, capital, allocation_pct
+        FROM options_buying_trades
+        ORDER BY timestamp ASC
+    """).fetchall()
+    con.close()
+    
+    trades = []
+    for row in trades_list:
+        trades.append({
+            "timestamp": row[0],
+            "entry_time": row[1],
+            "contract": row[2],
+            "strike": row[3],
+            "option_type": row[4],
+            "entry_price": row[5],
+            "exit_price": row[6],
+            "quantity": row[7],
+            "pnl": row[8],
+            "outcome": row[9],
+            "capital": row[10],
+            "allocation_pct": row[11]
+        })
+        
+    if not trades:
+        st.info("No strategy performance trades recorded yet. Please run the backtest under Calibration Desk to seed the database.")
+    else:
+        # Compute stats
+        starting_cap = 500000.0
+        total_pnl = sum(t["pnl"] for t in trades)
+        ending_cap = starting_cap + total_pnl
+        total_trades = len(trades)
+        wins = [t for t in trades if t["pnl"] > 0]
+        win_rate = len(wins) / total_trades if total_trades > 0 else 0.0
+        
+        # Display Stats row
+        st1, st2, st3, st4 = st.columns(4)
+        st1.metric("Starting Capital", f"₹ {starting_cap:,.2f}")
+        st2.metric("Ending Capital", f"₹ {ending_cap:,.2f}", f"{(total_pnl/starting_cap)*100:+.2f}%")
+        st3.metric("Total Trades", f"{total_trades}")
+        st4.metric("Win Rate", f"{win_rate:.1%}")
+        
+        st.markdown("---")
+        
+        # Group PnLs by date
+        daily_pnls = {}
+        for t in trades:
+            d_val = t["timestamp"].date()
+            daily_pnls[d_val] = daily_pnls.get(d_val, 0.0) + t["pnl"]
+            
+        # Draw Calendar
+        col_cal, col_details = st.columns([0.55, 0.45])
+        
+        with col_cal:
+            st.markdown("### 📅 Performance Timeline")
+            
+            # CSS for calendar
+            st.markdown("""
+            <style>
+            .calendar-container {
+                background-color: #0E1117;
+                border-radius: 12px;
+                padding: 16px;
+                border: 1px solid #1E293B;
+                margin-bottom: 20px;
+            }
+            .calendar-table {
+                width: 100%;
+                border-collapse: collapse;
+                text-align: center;
+            }
+            .calendar-table th {
+                padding: 8px;
+                color: #94A3B8;
+                font-weight: 500;
+                font-size: 0.85rem;
+                border-bottom: 1px solid #1E293B;
+            }
+            .calendar-table td {
+                width: 14.28%;
+                height: 50px;
+                vertical-align: middle;
+                border: 1px solid #1E293B;
+                position: relative;
+                padding: 4px;
+            }
+            .day-circle {
+                display: inline-block;
+                width: 32px;
+                height: 32px;
+                line-height: 32px;
+                border-radius: 50%;
+                font-weight: 600;
+                font-size: 0.9rem;
+            }
+            .pos-circle {
+                background-color: #22c55e;
+                color: #FFFFFF;
+            }
+            .neg-circle {
+                background-color: #ef4444;
+                color: #FFFFFF;
+            }
+            .no-circle {
+                color: #94A3B8;
+            }
+            .empty-day {
+                background-color: transparent !important;
+                border: none !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # June 2026 calendar generation
+            # June 1 2026 was a Monday
+            import calendar
+            cal_obj = calendar.Calendar(firstweekday=0)
+            month_days = cal_obj.monthdayscalendar(2026, 6)
+            
+            html_cal = "<div class='calendar-container'><table class='calendar-table'>"
+            html_cal += "<thead><tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr></thead>"
+            html_cal += "<tbody>"
+            
+            for week in month_days:
+                html_cal += "<tr>"
+                for day in week:
+                    if day == 0:
+                        html_cal += "<td class='empty-day'></td>"
+                    else:
+                        d_obj = datetime.date(2026, 6, day)
+                        day_pnl = daily_pnls.get(d_obj, None)
+                        
+                        if day_pnl is None:
+                            circle_class = "no-circle"
+                        elif day_pnl > 0:
+                            circle_class = "pos-circle"
+                        elif day_pnl < 0:
+                            circle_class = "neg-circle"
+                        else:
+                            circle_class = "no-circle" # flat is shown as no-circle
+                            
+                        html_cal += f"<td><span class='day-circle {circle_class}'>{day}</span></td>"
+                html_cal += "</tr>"
+            html_cal += "</tbody></table></div>"
+            
+            st.markdown(html_cal, unsafe_allow_html=True)
+            
+            # Selectbox below calendar
+            available_dates = sorted(list(daily_pnls.keys()))
+            date_strs = [d.strftime("%d/%m/%Y") for d in available_dates]
+            
+            default_idx = 0
+            for idx, d in enumerate(available_dates):
+                if d == datetime.date(2026, 6, 16):
+                    default_idx = idx
+                    break
+                    
+            selected_date_str = st.selectbox(
+                "Click on a date to see how the algo performed that day:",
+                options=date_strs,
+                index=default_idx
+            )
+            selected_date = datetime.datetime.strptime(selected_date_str, "%d/%m/%Y").date()
+            
+        with col_details:
+            selected_pnl = daily_pnls.get(selected_date, 0.0)
+            selected_pnl_pct = (selected_pnl / starting_cap) * 100
+            pnl_color = "#00FFCC" if selected_pnl >= 0 else "#FF3366"
+            pnl_prefix = "+" if selected_pnl >= 0 else ""
+            
+            st.markdown(f"""
+            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'>
+                <div>
+                    <span style='font-size: 0.95rem; color: #94A3B8; font-weight: 500;'>Date</span><br>
+                    <span style='font-size: 1.5rem; color: #F1F5F9; font-weight: bold;'>{selected_date.strftime('%d/%m/%Y')}</span>
+                </div>
+                <div style='text-align: right;'>
+                    <span style='font-size: 0.95rem; color: #94A3B8; font-weight: 500;'>Day P&L</span><br>
+                    <span style='font-size: 1.5rem; color: {pnl_color}; font-weight: bold;'>{pnl_prefix}{selected_pnl_pct:.2f}%</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"#### Signals Closed on - {selected_date.strftime('%d/%m/%Y')}")
+            
+            day_trades = [t for t in trades if t["timestamp"].date() == selected_date]
+            
+            # CSS for trade card
+            st.markdown("""
+            <style>
+            .trade-card {
+                background-color: #111827;
+                border: 1px solid #1E293B;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 12px;
+            }
+            .trade-card-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .trade-strategy-name {
+                font-weight: bold;
+                color: #F1F5F9;
+                font-size: 0.95rem;
+            }
+            .trade-time {
+                color: #94A3B8;
+                font-size: 0.8rem;
+            }
+            .alloc-warning {
+                background-color: rgba(255, 51, 102, 0.1);
+                color: #FF3366;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                border: 1px solid rgba(255, 51, 102, 0.2);
+            }
+            .alloc-info {
+                background-color: rgba(0, 255, 204, 0.05);
+                color: #00FFCC;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                border: 1px solid rgba(0, 255, 204, 0.1);
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            if not day_trades:
+                st.caption("No trades closed on this day.")
+            else:
+                for t in day_trades:
+                    # Format card
+                    entry_str = t["entry_time"].strftime("%b %d, %Y, %I:%M %p")
+                    exit_str = t["timestamp"].strftime("%b %d, %Y, %I:%M %p")
+                    
+                    qty = t["quantity"]
+                    pnl = t["pnl"]
+                    pnl_per_lot = pnl / (qty / 50.0) # Nifty lot size is 50
+                    pnl_per_lot_str = f"₹ {pnl_per_lot:+,.2f} / Lot"
+                    
+                    pnl_pct = (pnl / starting_cap) * 100
+                    pnl_pct_color = "#00FFCC" if pnl >= 0 else "#FF3366"
+                    pnl_pct_symbol = "▲" if pnl >= 0 else "▼"
+                    
+                    alloc = t["allocation_pct"]
+                    if alloc >= 20.0:
+                        alloc_html = f"<span class='alloc-warning'>🚨 RISKY TRADE: {alloc:.2f}% Capital Allocated</span>"
+                    else:
+                        alloc_html = f"<span class='alloc-info'>ℹ️ Conservative Trade: {alloc:.2f}% Capital Allocated</span>"
+                        
+                    outcome = t["outcome"]
+                    if outcome == "WIN":
+                        status_text = f"Closed On Target at {t['timestamp'].strftime('%I:%M %p')}"
+                    elif outcome == "LOSS":
+                        status_text = f"Closed On Stop Loss at {t['timestamp'].strftime('%I:%M %p')}"
+                    else:
+                        status_text = f"Closed On MIS Clearout at {t['timestamp'].strftime('%I:%M %p')}"
+                        
+                    st.markdown(f"""
+                    <div class='trade-card'>
+                        <div class='trade-card-header'>
+                            <div>
+                                <span class='trade-strategy-name'>⚡ Nifty Options Buying Momentum</span><br>
+                                <span class='trade-time'>{entry_str}</span><br>
+                                <span style='color: #00FFCC; font-size: 0.8rem;'>ATM Option Buying Intraday</span>
+                            </div>
+                            <div style='text-align: right;'>
+                                <span style='color: {pnl_pct_color}; font-weight: bold; font-size: 1.15rem;'>{pnl_per_lot_str}</span><br>
+                                <span style='color: {pnl_pct_color}; font-size: 0.85rem;'>{pnl_pct_symbol} {abs(pnl_pct):.2f}%</span>
+                            </div>
+                        </div>
+                        <hr style='border-color: #1E293B; margin: 10px 0;'>
+                        <table style='width: 100%; border-collapse: collapse; font-size: 0.9rem;'>
+                            <thead>
+                                <tr style='color: #94A3B8; text-align: left;'>
+                                    <th>Leg</th>
+                                    <th style='text-align: right;'>Entry</th>
+                                    <th style='text-align: right;'>Exit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr style='color: #F1F5F9;'>
+                                    <td style='color: #00FFCC;'><b>(B)</b> {t['contract']}</td>
+                                    <td style='text-align: right;'>₹ {t['entry_price']:.2f}</td>
+                                    <td style='text-align: right;'>₹ {t['exit_price']:.2f}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <div style='margin-top: 12px; display: flex; justify-content: space-between; align-items: center;'>
+                            {alloc_html}
+                            <span style='color: #94A3B8; font-size: 0.8rem;'>{status_text}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
 # ==============================================================================
 # AUTO-REFRESH RE-RUN TRIGGER

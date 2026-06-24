@@ -150,6 +150,23 @@ class DuckDBManager:
                     outcome VARCHAR
                 )
             """)
+            # Create options buying strategy trades table
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS options_buying_trades (
+                    timestamp TIMESTAMP,
+                    entry_time TIMESTAMP,
+                    contract VARCHAR,
+                    strike DOUBLE,
+                    option_type VARCHAR,
+                    entry_price DOUBLE,
+                    exit_price DOUBLE,
+                    quantity INTEGER,
+                    pnl DOUBLE,
+                    outcome VARCHAR,
+                    capital DOUBLE,
+                    allocation_pct DOUBLE
+                )
+            """)
             con.close()
 
     def insert_spot(self, timestamp: datetime.datetime, symbol: str, ltp: float, volume: float, vwap: float):
