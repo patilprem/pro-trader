@@ -296,95 +296,177 @@ tab_insights, tab_calibration, tab_ledger, tab_strategy = st.tabs([
 # PANE A: LIVE INSIGHTS PANEL
 # ------------------------------------------------------------------------------
 with tab_insights:
-    col_lhs, col_rhs = st.columns([0.65, 0.35])
+    st.markdown("### 📊 Dashboard & System Feeds Status")
     
-    with col_lhs:
-        st.markdown("### Dynamic Options Volatility Skew Curve")
-        # IV Smile chart
-        if chain:
-            strikes = [item["strike"] for item in chain]
-            ce_ivs = [item["ce_iv"] * 100 for item in chain]
-            pe_ivs = [item["pe_iv"] * 100 for item in chain]
-            
-            fig_skew = go.Figure()
-            fig_skew.add_trace(go.Scatter(
-                x=strikes, y=ce_ivs, mode='lines+markers', name='Call Option IV %',
-                line=dict(color='#00FFCC', width=3), marker=dict(size=8)
-            ))
-            fig_skew.add_trace(go.Scatter(
-                x=strikes, y=pe_ivs, mode='lines+markers', name='Put Option IV %',
-                line=dict(color='#E040FB', width=3), marker=dict(size=8)
-            ))
-            
-            # Highlight spot price line
-            fig_skew.add_vline(x=ltp_val, line_dash="dash", line_color="#FFFFFF", annotation_text="Spot LTP")
-            
-            fig_skew.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=40, r=40, t=10, b=40),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Strike Price"),
-                yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Implied Volatility (%)"),
-                height=350, template="plotly_dark"
-            )
-            st.plotly_chart(fig_skew, use_container_width=True)
-        else:
-            st.info("Awaiting initial options chain ticks to render IV skew...")
-
-        # Side-by-side Open Interest bar chart
-        st.markdown("### Open Interest Velocity & Multi-Strike Volume")
-        if chain:
-            strikes = [item["strike"] for item in chain]
-            ce_oi = [item["ce_oi"] for item in chain]
-            pe_oi = [item["pe_oi"] for item in chain]
-            
-            fig_oi = go.Figure()
-            fig_oi.add_trace(go.Bar(
-                x=strikes, y=ce_oi, name='Call (CE) OI', marker_color='#00E676'
-            ))
-            fig_oi.add_trace(go.Bar(
-                x=strikes, y=pe_oi, name='Put (PE) OI', marker_color='#FF1744'
-            ))
-            
-            fig_oi.update_layout(
-                barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                margin=dict(l=40, r=40, t=10, b=40),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Strike Price"),
-                yaxis=dict(gridcolor='rgba(255,255,255,0.05)', title="Contracts Open Interest"),
-                height=300, template="plotly_dark"
-            )
-            st.plotly_chart(fig_oi, use_container_width=True)
-
-    with col_rhs:
-        st.markdown("### Institutional L2 Depth Book")
-        if depth and "bids" in depth:
-            bids_df = pd.DataFrame(depth["bids"], columns=["Price", "Bid Vol"]).head(6)
-            asks_df = pd.DataFrame(depth["asks"], columns=["Price", "Ask Vol"]).head(6)
-            
-            # Format and display side by side
-            book_col1, book_col2 = st.columns(2)
-            with book_col1:
-                st.markdown("<p style='color:#00FFCC;font-weight:bold;text-align:center;'>BUY BIDS</p>", unsafe_allow_html=True)
-                st.dataframe(
-                    bids_df.style.format({"Price": "{:.2f}", "Bid Vol": "{:,.0f}"})
-                                .bar(subset=['Bid Vol'], color='rgba(0, 255, 204, 0.2)'),
-                    use_container_width=True, hide_index=True
-                )
-            with book_col2:
-                st.markdown("<p style='color:#FF3366;font-weight:bold;text-align:center;'>SELL ASKS</p>", unsafe_allow_html=True)
-                st.dataframe(
-                    asks_df.style.format({"Price": "{:.2f}", "Ask Vol": "{:,.0f}"})
-                                .bar(subset=['Ask Vol'], color='rgba(255, 51, 102, 0.2)'),
-                    use_container_width=True, hide_index=True
-                )
-                
-            # Wall clusters meter
-            st.markdown("#### Microstructure Liquidity Cluster Walls")
-            st.progress(bid_wall_val, text=f"Bid Wall Concentration (0.2%): {bid_wall_val:.1%}")
-            st.progress(ask_wall_val, text=f"Ask Wall Concentration (0.2%): {ask_wall_val:.1%}")
-        else:
-            st.info("Awaiting order book matrix ticks...")
+    # Check feed status
+    nifty_active = spot.get("ltp") is not None
+    order_book_active = depth and "bids" in depth and len(depth["bids"]) > 0
+    option_chain_active = len(chain) > 0
+    ml_active = len(features) == len(config.FEATURE_COLS)
+    
+    col_nifty, col_feeds = st.columns([0.45, 0.55])
+    
+    with col_nifty:
+        st.markdown(f"""
+        <div style='background: #111827; border: 1px solid #1E293B; border-radius: 12px; padding: 24px; text-align: center; margin-bottom: 15px;'>
+            <span style='font-size: 1rem; color: #94A3B8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;'>Nifty 50 Index Spot</span><br>
+            <span style='font-size: 3.5rem; color: #00FFCC; font-weight: 800; font-family: monospace; text-shadow: 0 0 10px rgba(0, 255, 204, 0.3);'>{ltp_val:,.2f}</span><br>
+            <hr style='border-color: #1E293B; margin: 15px 0;'>
+            <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-bottom: 8px;'>
+                <span style='color: #94A3B8;'>Daily VWAP</span>
+                <span style='color: #F1F5F9; font-weight: 600; font-family: monospace;'>₹ {vwap_val:,.2f}</span>
+            </div>
+            <div style='display: flex; justify-content: space-between; font-size: 0.95rem; margin-bottom: 8px;'>
+                <span style='color: #94A3B8;'>Execution Mode</span>
+                <span style='color: #00FFCC; font-weight: 600;'>{config.RUN_MODE}</span>
+            </div>
+            <div style='display: flex; justify-content: space-between; font-size: 0.95rem;'>
+                <span style='color: #94A3B8;'>Last Update</span>
+                <span style='color: #94A3B8; font-family: monospace;'>{datetime.datetime.now().strftime('%H:%M:%S')}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Microstructure quick stats
+        st.markdown(f"""
+        <div style='background: #111827; border: 1px solid #1E293B; border-radius: 12px; padding: 18px; display: flex; justify-content: space-between;'>
+            <div>
+                <span style='font-size: 0.8rem; color: #94A3B8;'>Order Book Imbalance</span><br>
+                <span style='font-size: 1.2rem; font-weight: bold; color:{"#00FFCC" if imbalance_val >= 0 else "#FF3366"};'>{imbalance_val:+.2%}</span>
+            </div>
+            <div style='border-left: 1px solid #1E293B; padding-left: 20px;'>
+                <span style='font-size: 0.8rem; color: #94A3B8;'>Breakout Probability</span><br>
+                <span style='font-size: 1.2rem; font-weight: bold; color: #00FFCC;'>{breakout_prob:.1%}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_feeds:
+        # Style sheet
+        st.markdown("""
+        <style>
+        .feed-card {
+            background-color: #111827;
+            border: 1px solid #1E293B;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .feed-info {
+            display: flex;
+            align-items: center;
+        }
+        .feed-icon {
+            font-size: 1.8rem;
+            margin-right: 15px;
+            width: 40px;
+            text-align: center;
+        }
+        .feed-title {
+            font-weight: bold;
+            color: #F1F5F9;
+            font-size: 1rem;
+        }
+        .feed-desc {
+            color: #94A3B8;
+            font-size: 0.8rem;
+            margin-top: 2px;
+        }
+        .badge-active {
+            background-color: rgba(34, 197, 94, 0.1);
+            color: #22C55E;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-inactive {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: #EF4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # 1. Spot Price Feed
+        status_spot = "badge-active" if nifty_active else "badge-inactive"
+        text_spot = "ACTIVE (GETTING DATA)" if nifty_active else "INACTIVE"
+        st.markdown(f"""
+        <div class='feed-card'>
+            <div class='feed-info'>
+                <div class='feed-icon'>📈</div>
+                <div>
+                    <div class='feed-title'>Nifty Spot Price Feed</div>
+                    <div class='feed-desc'>Index price, volume, and volume-weighted average price (VWAP)</div>
+                </div>
+            </div>
+            <div>
+                <span class='{status_spot}'>{text_spot}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 2. L2 Order Book Feed
+        status_ob = "badge-active" if order_book_active else "badge-inactive"
+        text_ob = "ACTIVE (GETTING DATA)" if order_book_active else "INACTIVE"
+        st.markdown(f"""
+        <div class='feed-card'>
+            <div class='feed-info'>
+                <div class='feed-icon'>📚</div>
+                <div>
+                    <div class='feed-title'>Order Book (L2 Depth) Feed</div>
+                    <div class='feed-desc'>Bid/Ask quotes depth, book imbalance, and density walls</div>
+                </div>
+            </div>
+            <div>
+                <span class='{status_ob}'>{text_ob}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 3. Option Chain Feed
+        status_oc = "badge-active" if option_chain_active else "badge-inactive"
+        text_oc = "ACTIVE (GETTING DATA)" if option_chain_active else "INACTIVE"
+        st.markdown(f"""
+        <div class='feed-card'>
+            <div class='feed-info'>
+                <div class='feed-icon'>⛓️</div>
+                <div>
+                    <div class='feed-title'>Option Chain & Greeks Feed</div>
+                    <div class='feed-desc'>Call/Put strike prices, premiums, IV rank, and options volume</div>
+                </div>
+            </div>
+            <div>
+                <span class='{status_oc}'>{text_oc}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 4. ML Engine Signals
+        status_ml = "badge-active" if ml_active else "badge-inactive"
+        text_ml = "READY" if ml_active else "NOT READY"
+        st.markdown(f"""
+        <div class='feed-card'>
+            <div class='feed-info'>
+                <div class='feed-icon'>🧠</div>
+                <div>
+                    <div class='feed-title'>ML Signals Core Engine</div>
+                    <div class='feed-desc'>Model predictions, feature skew/volatility engineering pipeline</div>
+                </div>
+            </div>
+            <div>
+                <span class='{status_ml}'>{text_ml}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
 # PANE B: MODEL CALIBRATION DESK
@@ -596,8 +678,138 @@ with tab_ledger:
 # PANE D: STRATEGY PERFORMANCE TAB
 # ------------------------------------------------------------------------------
 with tab_strategy:
-    st.markdown("<h2 style='color:#00FFCC;'>📈 Nifty Options Buying Strategy Performance</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='color:#00FFCC;'>📈 Nifty Options Buying Strategy Workspace</h2>", unsafe_allow_html=True)
     st.markdown("<b>Execution settings: 5 Lots (250 contracts), ₹5 Lakhs Starting Capital</b>", unsafe_allow_html=True)
+    
+    # 1. Short Description
+    st.markdown("""
+    <div style='background: rgba(17, 24, 39, 0.7); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 15px; margin-bottom: 20px;'>
+        <p style='margin: 0; color: #E2E8F0; font-size: 0.95rem; line-height: 1.5;'>
+            ⚡ <b>Nifty Options Buying Momentum Strategy</b> targets high-probability breakouts using a machine learning classifier ($\ge 58\%$ breakout confidence). It uses L2 order book imbalances and institutional density walls to trigger ATM Call (CE) or Put (PE) trades. Positions are structured at exactly 5 lots (250 contracts) with a tight 1:3 Risk-to-Reward ratio (10% Stop Loss, 30% Profit Target) and automated EOD clearout at 3:00 PM.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # 2. Today's Performance & Paper Trade Live Desk
+    st.markdown("### 🧪 Today's Paper Trading Workspace")
+    
+    today_trades = router.pnl_history
+    active_pos = router.active_position
+    
+    realized_pnl = sum(t["pnl"] for t in today_trades)
+    unrealized_pnl = active_pos["pnl"] if active_pos else 0.0
+    total_today_pnl = realized_pnl + unrealized_pnl
+    total_today_pnl_pct = (total_today_pnl / 500000.0) * 100
+    
+    tp_color = "#00FFCC" if total_today_pnl >= 0 else "#FF3366"
+    tp_prefix = "+" if total_today_pnl >= 0 else ""
+    
+    col_pnl, col_status, col_action = st.columns([0.3, 0.35, 0.35])
+    with col_pnl:
+        st.markdown(f"""
+        <div style='background: #111827; border: 1px solid #1E293B; border-radius: 10px; padding: 12px 16px; text-align: center; height: 100%;'>
+            <span style='font-size: 0.8rem; color: #94A3B8; font-weight: 500;'>TODAY'S NET P&L</span><br>
+            <span style='font-size: 1.5rem; color: {tp_color}; font-weight: 800; font-family: monospace;'>{tp_prefix}₹ {total_today_pnl:,.2f}</span><br>
+            <span style='font-size: 0.8rem; color: {tp_color}; font-family: monospace;'>({tp_prefix}{total_today_pnl_pct:.2f}%)</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_status:
+        pos_status_text = "1 OPEN POSITION" if active_pos else "NO ACTIVE POSITION"
+        pos_status_color = "#00FFCC" if active_pos else "#94A3B8"
+        st.markdown(f"""
+        <div style='background: #111827; border: 1px solid #1E293B; border-radius: 10px; padding: 12px 16px; text-align: center; height: 100%;'>
+            <span style='font-size: 0.8rem; color: #94A3B8; font-weight: 500;'>ACTIVE POSITION STATUS</span><br>
+            <span style='font-size: 1.3rem; color: {pos_status_color}; font-weight: bold; margin-top: 5px; display: inline-block;'>{pos_status_text}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_action:
+        # Emergency close for paper position
+        if active_pos:
+            if st.button("🔥 Close Active Position", use_container_width=True, key="strategy_kill_active"):
+                router.trigger_emergency_kill()
+                st.rerun()
+        else:
+            st.button("🔥 Close Active Position", disabled=True, use_container_width=True, key="strategy_kill_inactive")
+            
+    # Active Position Card Detail
+    if active_pos:
+        st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+        pnl_val = active_pos["pnl"]
+        pnl_pct = (pnl_val / (active_pos["entry_price"] * active_pos["qty"])) * 100
+        pnl_style = "color:#00FFCC;" if pnl_val >= 0 else "color:#FF3366;"
+        pnl_prefix = "+" if pnl_val >= 0 else ""
+        
+        st.markdown(f"""
+        <div style='background-color: #111827; border: 1px solid #00FFCC; border-radius: 12px; padding: 16px; margin-bottom: 12px;'>
+            <div style='display: flex; justify-content: space-between; align-items: center;'>
+                <div>
+                    <span style='font-weight: bold; color: #F1F5F9; font-size: 1rem;'>⚡ ACTIVE PAPER POSITION</span><br>
+                    <span style='color: #00FFCC; font-size: 0.95rem; font-family: monospace;'><b>{active_pos['contract']}</b> (B)</span>
+                </div>
+                <div style='text-align: right;'>
+                    <span style='font-size: 0.8rem; color: #94A3B8;'>UNREALIZED P&L</span><br>
+                    <span style='font-size: 1.4rem; font-weight: bold; font-family: monospace; {pnl_style}'>{pnl_prefix}₹ {pnl_val:,.2f}</span><br>
+                    <span style='font-size: 0.85rem; font-family: monospace; {pnl_style}'>({pnl_prefix}{pnl_pct:.2f}%)</span>
+                </div>
+            </div>
+            <hr style='border-color: #1E293B; margin: 10px 0;'>
+            <table style='width: 100%; border-collapse: collapse; font-size: 0.9rem;'>
+                <thead>
+                    <tr style='color: #94A3B8; text-align: left;'>
+                        <th>Leg Details</th>
+                        <th style='text-align: right;'>Entry Price</th>
+                        <th style='text-align: right;'>Current LTP</th>
+                        <th style='text-align: right;'>Stop Loss</th>
+                        <th style='text-align: right;'>Target</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style='color: #F1F5F9;'>
+                        <td>250 Contracts (5 Lots)</td>
+                        <td style='text-align: right;'>₹ {active_pos['entry_price']:.2f}</td>
+                        <td style='text-align: right; color:#00FFCC; font-weight: bold;'>₹ {active_pos['ltp']:.2f}</td>
+                        <td style='text-align: right; color:#FF3366;'>₹ {active_pos['stop_loss']:.2f}</td>
+                        <td style='text-align: right; color:#22C55E;'>₹ {active_pos['target']:.2f}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("No active paper position currently. The strategy engine will automatically trigger a trade when Nifty features align with the ML signals.")
+        
+    # Today's Executed Trades checklist
+    st.markdown("#### Today's Executed Paper Trades")
+    if today_trades:
+        for idx, t in enumerate(today_trades):
+            tpnl = t["pnl"]
+            tpnl_style = "color:#00FFCC;" if tpnl >= 0 else "color:#FF3366;"
+            tpnl_prefix = "+" if tpnl >= 0 else ""
+            t_outcome = t["outcome"]
+            
+            st.markdown(f"""
+            <div style='background-color: #111827; border: 1px solid #1E293B; border-radius: 8px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;'>
+                <div>
+                    <span style='font-size: 0.85rem; color: #94A3B8;'>{t['timestamp']}</span><br>
+                    <span style='font-weight: 600; color: #F1F5F9;'>{t['contract']}</span>
+                </div>
+                <div style='text-align: center;'>
+                    <span style='font-size: 0.8rem; color: #94A3B8;'>Entry / Exit</span><br>
+                    <span style='font-size: 0.9rem; color: #E2E8F0; font-family: monospace;'>₹ {t['entry']:.2f} ➜ ₹ {t['exit']:.2f}</span>
+                </div>
+                <div style='text-align: right;'>
+                    <span style='font-size: 0.8rem; color: #94A3B8;'>Outcome</span><br>
+                    <span style='font-size: 0.95rem; font-weight: bold; font-family: monospace; {tpnl_style}'>{tpnl_prefix}₹ {tpnl:,.2f} ({t_outcome})</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.caption("No paper trades executed in the current session yet.")
+        
+    st.markdown("---")
+    st.markdown("### 📅 Backtesting Performance Calendar View")
     
     # DuckDB connector
     import duckdb
