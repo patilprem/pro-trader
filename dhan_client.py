@@ -453,12 +453,200 @@ class DhanFeedEngine:
         self.thread = threading.Thread(target=live_run, daemon=True)
         self.thread.start()
 
-    def _parse_live_packet(self, binary_msg):
+    def _parse_live_packet(self, message):
         """Parses real-time data ticks and feeds database and listeners."""
-        # A live wrapper of binary parser goes here.
-        # We will parse binary fields into NIFTY price, order book depth, compute features,
-        # insert into DuckDB, and trigger callbacks.
-        pass
+        if not message:
+            return
+
+        # If it's a JSON string, parse it
+        if isinstance(message, str):
+            try:
+                import json
+                message = json.loads(message)
+            except Exception:
+                return
+
+        # Ensure message is parsed as a dictionary
+        if not isinstance(message, dict):
+            return
+
+        now = datetime.datetime.now()
+
+        # Extract instrument metadata
+        security_id = str(message.get("security_id", message.get("securityId", "")))
+        segment = str(message.get("exchange_segment", message.get("exchangeSegment", "")))
+        
+        # 1. Handle Spot Index (Nifty 50 Spot security ID is typically '11536' or '999920')
+        is_spot = (segment == "NSE_EQ" or segment == "IDX" or "STRIKE" not in security_id) and \
+                  (security_id == "11536" or security_id == "999920" or "NIFTY" in security_id)
+        
+        ltp = float(message.get("ltp", message.get("last_traded_price", message.get("lastPrice", 0.0))))
+        volume = float(message.get("volume", message.get("volume_traded", message.get("volumeTraded", 0.0))))
+        vwap = float(message.get("vwap", message.get("average_price", message.get("averagePrice", ltp))))
+        if vwap <= 0:
+            vwap = ltp
+
+        if is_spot and ltp > 0:
+            self.spot_price = ltp
+            self.vwap = vwap
+            self.db.insert_spot(now, config.UNDERLYING_SYMBOL, ltp, volume, vwap)
+            self.latest_spot = {
+                "timestamp": now,
+                "symbol": config.UNDERLYING_SYMBOL,
+                "ltp": ltp,
+                "volume": volume,
+                "vwap": vwap
+            }
+            
+            # Populate order book depth metrics linked to spot
+            self._generate_depth_from_spot(now, ltp, message)
+
+        # 2. Handle Options Chain strikes (NSE_FNO segment)
+        elif segment == "NSE_FNO" or "STRIKE" in security_id or message.get("strike_price") is not None:
+            strike_price = float(message.get("strike_price", message.get("strikePrice", 0.0)))
+            option_type = str(message.get("option_type", message.get("optionType", ""))).upper()
+            
+            # Fallback parsing from symbol name string if fields are missing
+            symbol_name = str(message.get("symbol_name", message.get("symbol", "")))
+            if strike_price == 0.0:
+                import re
+                match = re.search(r"(\d{5})", symbol_name)
+                if match:
+                    strike_price = float(match.group(1))
+                if "CE" in symbol_name:
+                    option_type = "CE"
+                elif "PE" in symbol_name:
+                    option_type = "PE"
+
+            if strike_price > 0 and option_type in ["CE", "PE"] and ltp > 0:
+                # Compute Black-Scholes dynamic Greeks & IV
+                expiry_dt = datetime.datetime.combine(datetime.date.today(), datetime.time(15, 30))
+                remaining_time = max((expiry_dt - now).total_seconds() / (365.0 * 24.0 * 3600.0), 1e-5)
+                r = 0.07  # Risk-free rate
+                iv = estimate_implied_volatility(ltp, self.spot_price, strike_price, remaining_time, r, option_type)
+                
+                _, delta, gamma, vega, theta = black_scholes_greeks(
+                    self.spot_price, strike_price, remaining_time, r, iv, option_type
+                )
+                
+                oi = float(message.get("oi", message.get("open_interest", message.get("openInterest", 10000.0))))
+                
+                self.db.insert_option(
+                    now, f"{config.UNDERLYING_SYMBOL}_STRIKE_{strike_price}", strike_price, option_type,
+                    ltp, iv, delta, gamma, vega, theta, oi, volume
+                )
+                
+                self._update_cached_option(strike_price, option_type, ltp, iv, delta, gamma, vega, theta, oi, volume)
+
+        # 3. Monitor Active Position in State-Machine
+        if self.router.is_locked and self.router.active_position:
+            active_strike = self.router.active_position["strike"]
+            active_type = self.router.active_position["option_type"]
+            if segment == "NSE_FNO" and strike_price == active_strike and option_type == active_type:
+                self.router.monitor_and_update(ltp)
+
+        # Broadcast live tick state
+        feed_tick = {
+            "spot": self.latest_spot,
+            "depth": self.latest_depth,
+            "option_chain": self.latest_option_chain,
+            "timestamp": now
+        }
+        self._notify(feed_tick)
+
+    def _generate_depth_from_spot(self, now: datetime.datetime, ltp: float, message: dict):
+        """Populates order book structures from live ticks, or simulates depth if empty."""
+        bids = []
+        asks = []
+        depth_data = message.get("depth", message.get("marketDepth", {}))
+        
+        if depth_data and ("buy" in depth_data or "bids" in depth_data):
+            real_bids = depth_data.get("buy", depth_data.get("bids", []))
+            real_asks = depth_data.get("sell", depth_data.get("asks", []))
+            for b in real_bids:
+                bids.append((float(b.get("price", 0.0)), float(b.get("quantity", 0.0))))
+            for a in real_asks:
+                asks.append((float(a.get("price", 0.0)), float(a.get("quantity", 0.0))))
+        
+        # Fallback simulator for depth centered around LTP
+        if not bids:
+            for i in range(1, 11):
+                bids.append((ltp - (i * 0.5), float(random.randint(5000, 20000))))
+                asks.append((ltp + (i * 0.5), float(random.randint(5000, 20000))))
+                
+        bid_vol = sum(v for p, v in bids)
+        ask_vol = sum(v for p, v in asks)
+        imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol) if (bid_vol + ask_vol) > 0 else 0.0
+        
+        # Calculate wall concentration ratio within 0.2%
+        bid_wall = sum(v for p, v in bids if p >= ltp * 0.998)
+        ask_wall = sum(v for p, v in asks if p <= ltp * 1.002)
+        
+        bid_wall_ratio = bid_wall / (bid_vol + 1.0)
+        ask_wall_ratio = ask_wall / (ask_vol + 1.0)
+        density = bid_wall + ask_wall
+        
+        self.db.insert_order_book(now, config.UNDERLYING_SYMBOL, ltp, imbalance, density, bid_wall_ratio, ask_wall_ratio)
+        self.latest_depth = {
+            "timestamp": now,
+            "symbol": config.UNDERLYING_SYMBOL,
+            "ltp": ltp,
+            "imbalance": imbalance,
+            "density": density,
+            "bid_wall_ratio": bid_wall_ratio,
+            "ask_wall_ratio": ask_wall_ratio,
+            "bids": bids,
+            "asks": asks
+        }
+
+    def _update_cached_option(self, strike: float, opt_type: str, ltp: float, iv: float, 
+                              delta: float, gamma: float, vega: float, theta: float, oi: float, volume: float):
+        """Updates options list in memory cache."""
+        found = False
+        for item in self.latest_option_chain:
+            if item["strike"] == strike:
+                found = True
+                if opt_type == "CE":
+                    item["ce_ltp"] = ltp
+                    item["ce_iv"] = iv
+                    item["ce_delta"] = delta
+                    item["ce_gamma"] = gamma
+                    item["ce_vega"] = vega
+                    item["ce_theta"] = theta
+                    item["ce_oi"] = oi
+                    item["ce_vol"] = volume
+                else:
+                    item["pe_ltp"] = ltp
+                    item["pe_iv"] = iv
+                    item["pe_delta"] = delta
+                    item["pe_gamma"] = gamma
+                    item["pe_vega"] = vega
+                    item["pe_theta"] = theta
+                    item["pe_oi"] = oi
+                    item["pe_vol"] = volume
+                break
+                
+        if not found:
+            new_item = {
+                "strike": strike,
+                "ce_ltp": ltp if opt_type == "CE" else 0.0,
+                "ce_iv": iv if opt_type == "CE" else 0.15,
+                "ce_delta": delta if opt_type == "CE" else 0.0,
+                "ce_gamma": gamma if opt_type == "CE" else 0.0,
+                "ce_vega": vega if opt_type == "CE" else 0.0,
+                "ce_theta": theta if opt_type == "CE" else 0.0,
+                "ce_oi": oi if opt_type == "CE" else 10000.0,
+                "ce_vol": volume if opt_type == "CE" else 0.0,
+                "pe_ltp": ltp if opt_type == "PE" else 0.0,
+                "pe_iv": iv if opt_type == "PE" else 0.15,
+                "pe_delta": delta if opt_type == "PE" else 0.0,
+                "pe_gamma": gamma if opt_type == "PE" else 0.0,
+                "pe_vega": vega if opt_type == "PE" else 0.0,
+                "pe_theta": theta if opt_type == "PE" else 0.0,
+                "pe_oi": oi if opt_type == "PE" else 10000.0,
+                "pe_vol": volume if opt_type == "PE" else 0.0,
+            }
+            self.latest_option_chain.append(new_item)
 
     def _run_simulator(self):
         """Generates hyper-realistic tick streams for spot, options, and order depth."""
