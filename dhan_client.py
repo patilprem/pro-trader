@@ -386,13 +386,41 @@ class DhanFeedEngine:
         self.latest_spot: Dict[str, Any] = {}
         self.latest_depth: Dict[str, Any] = {}
         self.latest_option_chain: List[Dict[str, Any]] = []
+        self.market_closed_override = False
+
+    def is_market_open_ist(self) -> bool:
+        """Helper to determine if the Indian Stock Market is currently open (9:15 AM - 3:30 PM IST, Mon-Fri)."""
+        # Convert UTC to IST (UTC + 5:30)
+        utc_now = datetime.datetime.utcnow()
+        ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+        
+        # Weekday check (0 = Monday, 4 = Friday)
+        if ist_now.weekday() >= 5:
+            return False
+            
+        market_start = datetime.time(9, 15, 0)
+        market_end = datetime.time(15, 30, 0)
+        current_time = ist_now.time()
+        
+        return market_start <= current_time <= market_end
 
     def start(self):
         self.running = True
-        if config.RUN_MODE == "SIMULATION":
+        
+        # Enforce rule: Live feed only if market is open
+        market_is_open = self.is_market_open_ist()
+        
+        if config.RUN_MODE == "LIVE" and not market_is_open:
+            print("[FEED ENGINE] Live mode selected but Indian Market is closed. Automatically falling back to SIMULATION.")
+            self.market_closed_override = True
+            self.thread = threading.Thread(target=self._run_simulator, daemon=True)
+            self.thread.start()
+        elif config.RUN_MODE == "SIMULATION":
+            self.market_closed_override = False
             self.thread = threading.Thread(target=self._run_simulator, daemon=True)
             self.thread.start()
         else:
+            self.market_closed_override = False
             self._start_live_feed()
 
     def stop(self):

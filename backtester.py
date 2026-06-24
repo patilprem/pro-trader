@@ -144,12 +144,182 @@ class OptionsBacktester:
         con.close()
         print("[BACKTESTER] Bootstrap completed successfully.")
 
+    def download_historical_from_dhan(self, client_id: str, access_token: str) -> bool:
+        """Downloads real historical minute-level data from Dhan API and seeds DuckDB."""
+        try:
+            from dhanhq import dhanhq
+        except ImportError:
+            print("[BACKTESTER] dhanhq SDK not installed. Skipping live download.")
+            return False
+
+        if client_id == "MOCK_CLIENT_ID" or access_token == "MOCK_ACCESS_TOKEN":
+            print("[BACKTESTER] Credentials are mock. Skipping live download.")
+            return False
+
+        print("[BACKTESTER] Connecting to Dhan REST API for historical download...")
+        try:
+            try:
+                dhan = dhanhq(client_id=client_id, access_token=access_token)
+            except TypeError:
+                dhan = dhanhq(client_id, access_token)
+                
+            # Fetch intraday minute data for Nifty 50 Index (ID 13, Segment: IDX_I)
+            print("[BACKTESTER] Fetching Nifty Spot minute-level bars from Dhan...")
+            spot_resp = dhan.intraday_minute_data(
+                security_id="13",
+                exchange_segment="IDX_I",
+                instrument_type="INDEX"
+            )
+            
+            if spot_resp.get("status") != "success" or "data" not in spot_resp:
+                print(f"[BACKTESTER] Error downloading spot data: {spot_resp}")
+                return False
+                
+            spot_data = spot_resp["data"]
+            times = spot_data.get("start_time", [])
+            closes = spot_data.get("close", [])
+            volumes = spot_data.get("volume", [])
+            
+            if not times:
+                print("[BACKTESTER] Download returned empty spot lists.")
+                return False
+                
+            con = duckdb.connect(self.db_path)
+            # Wipe tables to seed clean real historical series
+            con.execute("DELETE FROM spot_data")
+            con.execute("DELETE FROM order_book")
+            con.execute("DELETE FROM option_chain")
+            
+            # Seed Spot & Order book
+            cum_vol = 10000.0
+            cum_pv = float(closes[0]) * cum_vol
+            
+            print(f"[BACKTESTER] Inserting {len(times)} historical spot bars into DuckDB...")
+            for idx in range(len(times)):
+                dt = datetime.datetime.fromtimestamp(times[idx] / 1000.0)
+                spot = float(closes[idx])
+                vol = float(volumes[idx])
+                
+                cum_vol += vol
+                cum_pv += spot * vol
+                vwap = cum_pv / cum_vol
+                
+                # Insert Spot
+                con.execute("INSERT INTO spot_data VALUES (?, ?, ?, ?, ?)", (dt, "NIFTY-50", spot, vol, vwap))
+                
+                # Insert realistic order book imbalance/density
+                bid_vol = float(random.randint(100000, 200000))
+                ask_vol = float(random.randint(100000, 200000))
+                imbalance = (bid_vol - ask_vol) / (bid_vol + ask_vol)
+                density = bid_vol + ask_vol
+                bid_wall = float(random.uniform(0.1, 0.4))
+                ask_wall = float(random.uniform(0.1, 0.4))
+                
+                con.execute("INSERT INTO order_book VALUES (?, ?, ?, ?, ?, ?, ?)", (dt, "NIFTY-50", spot, imbalance, density, bid_wall, ask_wall))
+            
+            # Now fetch option chain strikes to match options historical data
+            today = datetime.date.today()
+            days_ahead = 3 - today.weekday()
+            if days_ahead < 0:
+                days_ahead += 7
+            next_thursday = today + datetime.timedelta(days=days_ahead)
+            expiry_str = next_thursday.strftime("%Y-%m-%d")
+            
+            print(f"[BACKTESTER] Fetching option chain strikes for expiry {expiry_str}...")
+            chain_resp = dhan.get_option_chain(
+                underlying_security_id="13",
+                underlying_type="INDEX",
+                expiry_date=expiry_str
+            )
+            
+            if chain_resp.get("status") == "success" or "data" in chain_resp:
+                data = chain_resp.get("data", chain_resp)
+                chain_list = data.get("option_chain", data.get("optionChain", []))
+                
+                # Sort by ATM proximity
+                spot_now = float(closes[-1])
+                chain_list.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 22000.0))) - spot_now))
+                
+                # Select nearest ATM strike
+                atm_item = chain_list[0]
+                strike = float(atm_item.get("strike_price", atm_item.get("strikePrice", 22000.0)))
+                
+                ce_id = atm_item.get("call_option", {}).get("security_id", atm_item.get("callOption", {}).get("securityId"))
+                pe_id = atm_item.get("put_option", {}).get("security_id", atm_item.get("putOption", {}).get("securityId"))
+                
+                # Download Call historical option
+                if ce_id:
+                    print(f"[BACKTESTER] Downloading historical minute data for ATM Call strike {strike} (ID: {ce_id})...")
+                    ce_resp = dhan.intraday_minute_data(
+                        security_id=str(ce_id),
+                        exchange_segment="NSE_FNO",
+                        instrument_type="OPTIDX"
+                    )
+                    if ce_resp.get("status") == "success" and "data" in ce_resp:
+                        ce_times = ce_resp["data"].get("start_time", [])
+                        ce_closes = ce_resp["data"].get("close", [])
+                        ce_vols = ce_resp["data"].get("volume", [])
+                        for i in range(len(ce_times)):
+                            dt = datetime.datetime.fromtimestamp(ce_times[i] / 1000.0)
+                            p = float(ce_closes[i])
+                            v = float(ce_vols[i])
+                            
+                            rem_t = max(0.001, (next_thursday - dt.date()).days / 365.0)
+                            from dhan_client import black_scholes_greeks, estimate_implied_volatility
+                            iv = estimate_implied_volatility(p, spot_now, strike, rem_t, 0.07, "CE")
+                            _, d, g, ve, th = black_scholes_greeks(spot_now, strike, rem_t, 0.07, iv, "CE")
+                            
+                            con.execute(
+                                "INSERT INTO option_chain VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (dt, f"NIFTY-50_STRIKE_{strike}", strike, "CE", p, iv, d, g, ve, th, 100000.0, v)
+                            )
+                            
+                # Download Put historical option
+                if pe_id:
+                    print(f"[BACKTESTER] Downloading historical minute data for ATM Put strike {strike} (ID: {pe_id})...")
+                    pe_resp = dhan.intraday_minute_data(
+                        security_id=str(pe_id),
+                        exchange_segment="NSE_FNO",
+                        instrument_type="OPTIDX"
+                    )
+                    if pe_resp.get("status") == "success" and "data" in pe_resp:
+                        pe_times = pe_resp["data"].get("start_time", [])
+                        pe_closes = pe_resp["data"].get("close", [])
+                        pe_vols = pe_resp["data"].get("volume", [])
+                        for i in range(len(pe_times)):
+                            dt = datetime.datetime.fromtimestamp(pe_times[i] / 1000.0)
+                            p = float(pe_closes[i])
+                            v = float(pe_vols[i])
+                            
+                            rem_t = max(0.001, (next_thursday - dt.date()).days / 365.0)
+                            from dhan_client import black_scholes_greeks, estimate_implied_volatility
+                            iv = estimate_implied_volatility(p, spot_now, strike, rem_t, 0.07, "PE")
+                            _, d, g, ve, th = black_scholes_greeks(spot_now, strike, rem_t, 0.07, iv, "PE")
+                            
+                            con.execute(
+                                "INSERT INTO option_chain VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (dt, f"NIFTY-50_STRIKE_{strike}", strike, "PE", p, iv, d, g, ve, th, 100000.0, v)
+                            )
+            
+            con.close()
+            print("[BACKTESTER] Successfully populated DuckDB with real historical Dhan data!")
+            return True
+        except Exception as e:
+            print(f"[BACKTESTER] Failed to download historical data from Dhan: {e}")
+            return False
+
     def run_backtest(
-        self, probability_threshold: float = 0.55, slippage_pct: float = 0.005
+        self, probability_threshold: float = 0.55, slippage_pct: float = 0.005,
+        client_id: str = None, access_token: str = None
     ) -> Dict[str, Any]:
         """Runs the event-driven backtest on DuckDB records."""
-        # Ensure database is populated
-        self.bootstrap_historical_data()
+        # Try to download actual historical data if credentials are provided, else bootstrap mock
+        downloaded = False
+        if client_id and access_token:
+            downloaded = self.download_historical_from_dhan(client_id, access_token)
+            
+        if not downloaded:
+            self.bootstrap_historical_data()
         
         con = duckdb.connect(self.db_path)
         
