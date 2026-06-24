@@ -410,6 +410,103 @@ class DhanFeedEngine:
             except Exception as e:
                 print(f"Error in feed subscriber callback: {e}")
 
+    def _initialize_live_data_from_rest(self, dhan_rest, expiry_str: str):
+        """Fetches the latest closing quotes via REST API and seeds the DB/cache (for after-hours display)."""
+        now = datetime.datetime.now()
+        print("[LIVE] Fetching latest market closing quotes via REST API...")
+        
+        # 1. Fetch Spot Index (Nifty 50 Index)
+        spot_price = 22000.0
+        vwap = 22000.0
+        volume = 0.0
+        try:
+            q_resp = dhan_rest.get_market_quote(
+                instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
+            )
+            if q_resp.get("status") == "success" and "data" in q_resp:
+                spot_data = q_resp["data"].get("13", {})
+                spot_price = float(spot_data.get("last_price", spot_data.get("lastPrice", 22000.0)))
+                vwap = float(spot_data.get("average_price", spot_data.get("averagePrice", spot_price)))
+                volume = float(spot_data.get("volume", spot_data.get("volume_traded", 0.0)))
+                
+                self.spot_price = spot_price
+                self.vwap = vwap
+                self.db.insert_spot(now, config.UNDERLYING_SYMBOL, spot_price, volume, vwap)
+                self.latest_spot = {
+                    "timestamp": now,
+                    "symbol": config.UNDERLYING_SYMBOL,
+                    "ltp": spot_price,
+                    "volume": volume,
+                    "vwap": vwap
+                }
+                
+                # Generate depth snapshot centered on closing Spot
+                self._generate_depth_from_spot(now, spot_price, spot_data)
+        except Exception as e:
+            print(f"[LIVE] Failed to fetch spot closing quote: {e}")
+            
+        # 2. Fetch Option Chain details
+        try:
+            chain_resp = dhan_rest.get_option_chain(
+                underlying_security_id="13",
+                underlying_type="INDEX",
+                expiry_date=expiry_str
+            )
+            if chain_resp.get("status") == "success" or "data" in chain_resp:
+                data = chain_resp.get("data", chain_resp)
+                chain_list = data.get("option_chain", data.get("optionChain", []))
+                
+                # Clear option chain cache to populate fresh real data
+                self.latest_option_chain = []
+                
+                for item in chain_list:
+                    strike = float(item.get("strike_price", item.get("strikePrice", 0.0)))
+                    if strike <= 0:
+                        continue
+                        
+                    # Call details
+                    c_opt = item.get("call_option", item.get("callOption", {}))
+                    c_price = float(c_opt.get("ltp", c_opt.get("lastPrice", 0.0)))
+                    c_oi = float(c_opt.get("oi", c_opt.get("openInterest", 0.0)))
+                    c_vol = float(c_opt.get("volume", 0.0))
+                    
+                    # Put details
+                    p_opt = item.get("put_option", item.get("putOption", {}))
+                    p_price = float(p_opt.get("ltp", p_opt.get("lastPrice", 0.0)))
+                    p_oi = float(p_opt.get("oi", p_opt.get("openInterest", 0.0)))
+                    p_vol = float(p_opt.get("volume", 0.0))
+                    
+                    # Compute greeks & IV for Call
+                    expiry_dt = datetime.datetime.combine(datetime.date.today(), datetime.time(15, 30))
+                    remaining_time = max((expiry_dt - now).total_seconds() / (365.0 * 24.0 * 3600.0), 1e-5)
+                    r = 0.07
+                    
+                    if c_price > 0:
+                        c_iv = estimate_implied_volatility(c_price, spot_price, strike, remaining_time, r, "CE")
+                        _, c_d, c_g, c_v, c_t = black_scholes_greeks(spot_price, strike, remaining_time, r, c_iv, "CE")
+                        self.db.insert_option(now, f"{config.UNDERLYING_SYMBOL}_STRIKE_{strike}", strike, "CE", c_price, c_iv, c_d, c_g, c_v, c_t, c_oi, c_vol)
+                        self._update_cached_option(strike, "CE", c_price, c_iv, c_d, c_g, c_v, c_t, c_oi, c_vol)
+                        
+                    # Compute greeks & IV for Put
+                    if p_price > 0:
+                        p_iv = estimate_implied_volatility(p_price, spot_price, strike, remaining_time, r, "PE")
+                        _, p_d, p_g, p_v, p_t = black_scholes_greeks(spot_price, strike, remaining_time, r, p_iv, "PE")
+                        self.db.insert_option(now, f"{config.UNDERLYING_SYMBOL}_STRIKE_{strike}", strike, "PE", p_price, p_iv, p_d, p_g, p_v, p_t, p_oi, p_vol)
+                        self._update_cached_option(strike, "PE", p_price, p_iv, p_d, p_g, p_v, p_t, p_oi, p_vol)
+                        
+                print(f"[LIVE] Initialized database with {len(self.latest_option_chain)} options chain closing prices.")
+        except Exception as e:
+            print(f"[LIVE] Failed to fetch option chain closing quote: {e}")
+            
+        # Notify interface immediately
+        feed_tick = {
+            "spot": self.latest_spot,
+            "depth": self.latest_depth,
+            "option_chain": self.latest_option_chain,
+            "timestamp": now
+        }
+        self._notify(feed_tick)
+
     def _start_live_feed(self):
         """Starts real connection using dhanhq library."""
         if not DHAN_AVAILABLE:
@@ -456,6 +553,9 @@ class DhanFeedEngine:
                 next_thursday = today + datetime.timedelta(days=days_ahead)
                 expiry_str = next_thursday.strftime("%Y-%m-%d")
                 
+                # Fetch closing quotes via REST immediately before WebSocket starts (for after-hours display)
+                self._initialize_live_data_from_rest(dhan_rest, expiry_str)
+                
                 try:
                     print(f"[LIVE] Querying option chain for NIFTY-50 (expiry: {expiry_str})...")
                     response = dhan_rest.get_option_chain(
@@ -464,6 +564,11 @@ class DhanFeedEngine:
                         expiry_date=expiry_str
                     )
                     
+                    # Validate Token: raise error if token is unauthorized
+                    if response.get("status") == "failure" or "error" in response or \
+                       ("remarks" in response and "token" in response.get("remarks", "").lower()):
+                        raise Exception(response.get("remarks", "Dhan token validation failed."))
+                        
                     if response.get("status") == "success" or "data" in response:
                         data = response.get("data", response)
                         chain_data = data.get("option_chain", data.get("optionChain", []))
