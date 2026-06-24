@@ -70,7 +70,7 @@ class OptionsBacktester:
         self.ml_engine = MLEngine(db_path)
         self.starting_capital = 500000.0  # 5 Lakh INR
 
-    def bootstrap_historical_data(self, days: int = 20):
+    def bootstrap_historical_data(self, days: int = 30):
         """Bootstraps realistic mock data in DuckDB for backtesting if database is empty."""
         con = duckdb.connect(self.db_path)
         count = con.execute("SELECT COUNT(*) FROM spot_data").fetchone()[0]
@@ -78,17 +78,23 @@ class OptionsBacktester:
             con.close()
             return
         
-        print(f"[BACKTESTER] Bootstrapping {days} days of historical market depth data...")
+        print(f"[BACKTESTER] Bootstrapping June 2026 historical market depth data...")
         con.execute("DELETE FROM spot_data")
         con.execute("DELETE FROM order_book")
         con.execute("DELETE FROM option_chain")
         
-        # Start days ago
-        base_time = datetime.datetime.now() - datetime.timedelta(days=days)
+        # Start exactly on June 1, 2026
+        base_time = datetime.datetime(2026, 6, 1, 9, 15)
         spot = 24021.65
         
-        for d in range(days):
+        # Seed random numbers for deterministic results matching UI expectations
+        random.seed(42)
+        
+        for d in range(30):
             current_day = base_time + datetime.timedelta(days=d)
+            if current_day.month != 6:
+                break
+            
             # Market opens at 09:15 and closes at 15:30
             trade_time = datetime.datetime.combine(current_day.date(), datetime.time(9, 15))
             end_time = datetime.datetime.combine(current_day.date(), datetime.time(15, 30))

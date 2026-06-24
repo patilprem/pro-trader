@@ -881,255 +881,425 @@ with tab_strategy:
             d_val = t["timestamp"].date()
             daily_pnls[d_val] = daily_pnls.get(d_val, 0.0) + t["pnl"]
             
-        # Draw Calendar
-        col_cal, col_details = st.columns([0.55, 0.45])
+        # Read selected date from query params or default to June 16, 2026
+        qp = st.query_params
+        selected_date_str = qp.get("selected_date", "2026-06-16")
+        try:
+            selected_date = datetime.datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+        except Exception:
+            selected_date = datetime.date(2026, 6, 16)
+            
+        # Draw Calendar using light theme wrapper to match user's mockup
+        st.markdown("""
+        <style>
+        .timeline-card-wrapper {
+            background-color: #FFFFFF;
+            color: #1E293B;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 24px;
+            font-family: 'Inter', sans-serif;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .timeline-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .timeline-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #0F172A !important;
+            margin: 0;
+        }
+        .timeline-subtitle {
+            font-size: 0.85rem;
+            color: #64748B;
+            margin-top: 4px;
+        }
+        .timeline-body-grid {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+        }
+        .legend-col {
+            width: 30%;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            color: #475569;
+        }
+        .legend-color {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+        }
+        .legend-gray { background-color: #E2E8F0; }
+        .legend-green { background-color: #A7F3D0; }
+        .legend-red { background-color: #FCA5A5; }
         
-        with col_cal:
-            st.markdown("### 📅 Performance Timeline")
-            
-            # CSS for calendar
-            st.markdown("""
-            <style>
-            .calendar-container {
-                background-color: #0E1117;
-                border-radius: 12px;
-                padding: 16px;
-                border: 1px solid #1E293B;
-                margin-bottom: 20px;
-            }
-            .calendar-table {
-                width: 100%;
-                border-collapse: collapse;
-                text-align: center;
-            }
-            .calendar-table th {
-                padding: 8px;
-                color: #94A3B8;
-                font-weight: 500;
-                font-size: 0.85rem;
-                border-bottom: 1px solid #1E293B;
-            }
-            .calendar-table td {
-                width: 14.28%;
-                height: 50px;
-                vertical-align: middle;
-                border: 1px solid #1E293B;
-                position: relative;
-                padding: 4px;
-            }
-            .day-circle {
-                display: inline-block;
-                width: 32px;
-                height: 32px;
-                line-height: 32px;
-                border-radius: 50%;
-                font-weight: 600;
-                font-size: 0.9rem;
-            }
-            .pos-circle {
-                background-color: #22c55e;
-                color: #FFFFFF;
-            }
-            .neg-circle {
-                background-color: #ef4444;
-                color: #FFFFFF;
-            }
-            .no-circle {
-                color: #94A3B8;
-            }
-            .empty-day {
-                background-color: transparent !important;
-                border: none !important;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            # June 2026 calendar generation
-            # June 1 2026 was a Monday
-            import calendar
-            cal_obj = calendar.Calendar(firstweekday=0)
-            month_days = cal_obj.monthdayscalendar(2026, 6)
-            
-            html_cal = "<div class='calendar-container'><table class='calendar-table'>"
-            html_cal += "<thead><tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr></thead>"
-            html_cal += "<tbody>"
-            
-            for week in month_days:
-                html_cal += "<tr>"
-                for day in week:
-                    if day == 0:
-                        html_cal += "<td class='empty-day'></td>"
-                    else:
-                        d_obj = datetime.date(2026, 6, day)
-                        day_pnl = daily_pnls.get(d_obj, None)
-                        
-                        if day_pnl is None:
-                            circle_class = "no-circle"
-                        elif day_pnl > 0:
-                            circle_class = "pos-circle"
-                        elif day_pnl < 0:
-                            circle_class = "neg-circle"
-                        else:
-                            circle_class = "no-circle" # flat is shown as no-circle
-                            
-                        html_cal += f"<td><span class='day-circle {circle_class}'>{day}</span></td>"
-                html_cal += "</tr>"
-            html_cal += "</tbody></table></div>"
-            
-            st.markdown(html_cal, unsafe_allow_html=True)
-            
-            # Selectbox below calendar
-            available_dates = sorted(list(daily_pnls.keys()))
-            date_strs = [d.strftime("%d/%m/%Y") for d in available_dates]
-            
-            default_idx = 0
-            for idx, d in enumerate(available_dates):
-                if d == datetime.date(2026, 6, 16):
-                    default_idx = idx
-                    break
-                    
-            selected_date_str = st.selectbox(
-                "Click on a date to see how the algo performed that day:",
-                options=date_strs,
-                index=default_idx
-            )
-            selected_date = datetime.datetime.strptime(selected_date_str, "%d/%m/%Y").date()
-            
-        with col_details:
-            selected_pnl = daily_pnls.get(selected_date, 0.0)
-            selected_pnl_pct = (selected_pnl / starting_cap) * 100
-            pnl_color = "#00FFCC" if selected_pnl >= 0 else "#FF3366"
-            pnl_prefix = "+" if selected_pnl >= 0 else ""
-            
-            st.markdown(f"""
-            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'>
+        .calendar-col {
+            width: 65%;
+        }
+        .cal-nav {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-bottom: 15px;
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: #0F172A;
+        }
+        .cal-arrow {
+            color: #64748B;
+            text-decoration: none;
+            font-size: 1.2rem;
+            cursor: pointer;
+        }
+        .cal-grid-table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: center;
+        }
+        .cal-grid-table th {
+            padding: 8px;
+            color: #64748B;
+            font-weight: 500;
+            font-size: 0.85rem;
+            border-bottom: 1px solid #F1F5F9;
+        }
+        .cal-grid-table td {
+            padding: 6px;
+            width: 14.28%;
+        }
+        .cal-day-box {
+            display: inline-block;
+            width: 36px;
+            height: 36px;
+            line-height: 36px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            text-decoration: none;
+            text-align: center;
+        }
+        .cal-day-no-trade {
+            color: #64748B;
+            background-color: transparent;
+        }
+        .cal-day-profit {
+            color: #065f46;
+            background-color: #A7F3D0;
+        }
+        .cal-day-loss {
+            color: #991b1b;
+            background-color: #FCA5A5;
+        }
+        .cal-day-active {
+            color: #FFFFFF !important;
+            background-color: #10B981 !important;
+        }
+        
+        /* Trade Card CSS */
+        .pr-trade-card {
+            background-color: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            font-family: 'Inter', sans-serif;
+        }
+        .pr-trade-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 15px;
+        }
+        .pr-strategy-title {
+            font-weight: 700;
+            color: #0F172A;
+            font-size: 1.05rem;
+            margin: 0;
+        }
+        .pr-trade-time {
+            font-size: 0.8rem;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        .pr-strategy-tag {
+            font-size: 0.8rem;
+            color: #10B981;
+            font-weight: 600;
+            margin-top: 4px;
+            display: inline-block;
+        }
+        .pr-trade-pnl-box {
+            text-align: right;
+            margin-right: 15px;
+        }
+        .pr-trade-pnl-lot {
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+        .pr-trade-pnl-pct {
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-top: 2px;
+        }
+        .pr-about-btn {
+            border: 1px solid #CBD5E1;
+            background-color: #FFFFFF;
+            color: #334155;
+            border-radius: 8px;
+            padding: 8px 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-block;
+            text-decoration: none;
+            text-align: center;
+        }
+        .pr-legs-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            margin-bottom: 15px;
+        }
+        .pr-legs-table th {
+            color: #64748B;
+            font-weight: 500;
+            font-size: 0.8rem;
+            text-align: left;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #F1F5F9;
+        }
+        .pr-legs-table td {
+            padding: 8px 0;
+            font-size: 0.9rem;
+            color: #334155;
+            border-bottom: 1px solid #F8FAFC;
+        }
+        .pr-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            margin-top: 10px;
+        }
+        .pr-alloc-risky {
+            color: #EF4444;
+            font-weight: 600;
+        }
+        .pr-alloc-conservative {
+            color: #10B981;
+            font-weight: 600;
+        }
+        .pr-exit-status {
+            color: #10B981;
+            font-weight: 600;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # June 2026 calendar generation
+        import calendar
+        cal_obj = calendar.Calendar(firstweekday=0)
+        month_days = cal_obj.monthdayscalendar(2026, 6)
+        
+        html_cal = """
+        <div class="timeline-card-wrapper">
+            <div class="timeline-header">
                 <div>
-                    <span style='font-size: 0.95rem; color: #94A3B8; font-weight: 500;'>Date</span><br>
-                    <span style='font-size: 1.5rem; color: #F1F5F9; font-weight: bold;'>{selected_date.strftime('%d/%m/%Y')}</span>
+                    <h3 class="timeline-title">Timeline</h3>
+                    <div class="timeline-subtitle">Click on a date to see how the algo performed that day</div>
                 </div>
-                <div style='text-align: right;'>
-                    <span style='font-size: 0.95rem; color: #94A3B8; font-weight: 500;'>Day P&L</span><br>
-                    <span style='font-size: 1.5rem; color: {pnl_color}; font-weight: bold;'>{pnl_prefix}{selected_pnl_pct:.2f}%</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                    <div style="background-color: #10B981; padding: 6px; border-radius: 6px; display: flex; align-items: center; justify-content: center;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                    </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-            
-            st.markdown(f"#### Signals Closed on - {selected_date.strftime('%d/%m/%Y')}")
-            
-            day_trades = [t for t in trades if t["timestamp"].date() == selected_date]
-            
-            # CSS for trade card
-            st.markdown("""
-            <style>
-            .trade-card {
-                background-color: #111827;
-                border: 1px solid #1E293B;
-                border-radius: 12px;
-                padding: 16px;
-                margin-bottom: 12px;
-            }
-            .trade-card-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-            .trade-strategy-name {
-                font-weight: bold;
-                color: #F1F5F9;
-                font-size: 0.95rem;
-            }
-            .trade-time {
-                color: #94A3B8;
-                font-size: 0.8rem;
-            }
-            .alloc-warning {
-                background-color: rgba(255, 51, 102, 0.1);
-                color: #FF3366;
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 0.75rem;
-                font-weight: 600;
-                border: 1px solid rgba(255, 51, 102, 0.2);
-            }
-            .alloc-info {
-                background-color: rgba(0, 255, 204, 0.05);
-                color: #00FFCC;
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-size: 0.75rem;
-                font-weight: 600;
-                border: 1px solid rgba(0, 255, 204, 0.1);
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            
-            if not day_trades:
-                st.caption("No trades closed on this day.")
-            else:
-                for t in day_trades:
-                    # Format card
-                    entry_str = t["entry_time"].strftime("%b %d, %Y, %I:%M %p")
-                    exit_str = t["timestamp"].strftime("%b %d, %Y, %I:%M %p")
+            <div class="timeline-body-grid">
+                <div class="legend-col">
+                    <div class="legend-item">
+                        <div class="legend-color legend-gray"></div>
+                        <span>No trades</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color legend-green"></div>
+                        <span>Profitable Trades</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color legend-red"></div>
+                        <span>Lossy Trades</span>
+                    </div>
+                </div>
+                <div class="calendar-col">
+                    <div class="cal-nav">
+                        <span class="cal-arrow">&lt;</span>
+                        <span>Jun 2026</span>
+                        <span class="cal-arrow">&gt;</span>
+                    </div>
+                    <table class="cal-grid-table">
+                        <thead>
+                            <tr>
+                                <th>Mon</th>
+                                <th>Tue</th>
+                                <th>Wed</th>
+                                <th>Thu</th>
+                                <th>Fri</th>
+                                <th>Sat</th>
+                                <th>Sun</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        """
+        
+        for week in month_days:
+            html_cal += "<tr>"
+            for day in week:
+                if day == 0:
+                    html_cal += "<td></td>"
+                else:
+                    d_obj = datetime.date(2026, 6, day)
+                    day_pnl = daily_pnls.get(d_obj, None)
                     
-                    qty = t["quantity"]
-                    pnl = t["pnl"]
-                    pnl_per_lot = pnl / (qty / 50.0) # Nifty lot size is 50
-                    pnl_per_lot_str = f"₹ {pnl_per_lot:+,.2f} / Lot"
-                    
-                    pnl_pct = (pnl / starting_cap) * 100
-                    pnl_pct_color = "#00FFCC" if pnl >= 0 else "#FF3366"
-                    pnl_pct_symbol = "▲" if pnl >= 0 else "▼"
-                    
-                    alloc = t["allocation_pct"]
-                    if alloc >= 20.0:
-                        alloc_html = f"<span class='alloc-warning'>🚨 RISKY TRADE: {alloc:.2f}% Capital Allocated</span>"
+                    if d_obj == selected_date:
+                        circle_class = "cal-day-active"
+                    elif day_pnl is None:
+                        circle_class = "cal-day-no-trade"
+                    elif day_pnl > 0:
+                        circle_class = "cal-day-profit"
                     else:
-                        alloc_html = f"<span class='alloc-info'>ℹ️ Conservative Trade: {alloc:.2f}% Capital Allocated</span>"
+                        circle_class = "cal-day-loss"
                         
-                    outcome = t["outcome"]
-                    if outcome == "WIN":
-                        status_text = f"Closed On Target at {t['timestamp'].strftime('%I:%M %p')}"
-                    elif outcome == "LOSS":
-                        status_text = f"Closed On Stop Loss at {t['timestamp'].strftime('%I:%M %p')}"
-                    else:
-                        status_text = f"Closed On MIS Clearout at {t['timestamp'].strftime('%I:%M %p')}"
-                        
-                    st.markdown(f"""
-                    <div class='trade-card'>
-                        <div class='trade-card-header'>
-                            <div>
-                                <span class='trade-strategy-name'>⚡ Nifty Options Buying Momentum</span><br>
-                                <span class='trade-time'>{entry_str}</span><br>
-                                <span style='color: #00FFCC; font-size: 0.8rem;'>ATM Option Buying Intraday</span>
+                    html_cal += f"<td><a href='?selected_date=2026-06-{day:02d}' target='_self' class='cal-day-box {circle_class}'>{day}</a></td>"
+            html_cal += "</tr>"
+            
+        html_cal += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        """
+        st.markdown(html_cal, unsafe_allow_html=True)
+        
+        # Details below Calendar
+        selected_pnl = daily_pnls.get(selected_date, 0.0)
+        selected_pnl_pct = (selected_pnl / starting_cap) * 100
+        pnl_color = "#10B981" if selected_pnl >= 0 else "#EF4444"
+        pnl_prefix = "+" if selected_pnl >= 0 else ""
+        pnl_pct_symbol = "▲" if selected_pnl >= 0 else "▼"
+        
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 30px; margin-bottom: 10px; font-family: 'Inter', sans-serif;">
+            <div>
+                <span style="font-size: 0.85rem; color: #94A3B8; text-transform: uppercase; font-weight: 500;">Date</span><br>
+                <span style="font-size: 1.5rem; font-weight: 700; color: #F1F5F9;">{selected_date.strftime('%d/%m/%Y')}</span>
+            </div>
+            <div style="text-align: right;">
+                <span style="font-size: 0.85rem; color: #94A3B8; text-transform: uppercase; font-weight: 500;">Day P&L</span><br>
+                <span style="font-size: 1.5rem; font-weight: 700; color: {pnl_color};">{pnl_prefix}{selected_pnl_pct:.2f}%</span>
+            </div>
+        </div>
+        <div style="font-size: 1.15rem; font-weight: 700; color: #F1F5F9; margin-bottom: 20px; font-family: 'Inter', sans-serif;">
+            Signals Closed on - {selected_date.strftime('%d/%m/%Y')}
+        </div>
+        """, unsafe_allow_html=True)
+        
+        day_trades = [t for t in trades if t["timestamp"].date() == selected_date]
+        
+        if not day_trades:
+            st.caption("No trades closed on this day.")
+        else:
+            for t in day_trades:
+                qty = t["quantity"]
+                pnl = t["pnl"]
+                pnl_per_lot = pnl / (qty / 50.0)
+                
+                if abs(pnl_per_lot) >= 1000.0:
+                    formatted_pnl_lot = f"{pnl_per_lot/1000.0:+.2f}K / Lot"
+                else:
+                    formatted_pnl_lot = f"₹ {pnl_per_lot:+.2f} / Lot"
+                    
+                pnl_pct = (pnl / starting_cap) * 100
+                pnl_pct_color = "#10B981" if pnl >= 0 else "#EF4444"
+                pnl_pct_symbol = "▲" if pnl >= 0 else "▼"
+                
+                alloc = t["allocation_pct"]
+                if alloc >= 20.0:
+                    alloc_html = f"<span class='pr-alloc-risky'>🚨 RISKY TRADE: {alloc:.2f}% Capital Allocated</span>"
+                else:
+                    alloc_html = f"<span class='pr-alloc-conservative'>ℹ️ Conservative Trade: {alloc:.2f}% Capital Allocated</span>"
+                    
+                outcome = t["outcome"]
+                if outcome == "WIN":
+                    status_text = "Closed On Target"
+                elif outcome == "LOSS":
+                    status_text = "Closed On Stop Loss"
+                else:
+                    status_text = "Closed On MIS Clearout"
+                    
+                exit_time_str = t["timestamp"].strftime("%b %d %Y, %I:%M %p")
+                entry_time_str = t["entry_time"].strftime("%b %d, %Y, %I:%M %p")
+                
+                st.markdown(f"""
+                <div class="pr-trade-card">
+                    <div class="pr-trade-card-header">
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <div style="background-color: #10B981; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
                             </div>
-                            <div style='text-align: right;'>
-                                <span style='color: {pnl_pct_color}; font-weight: bold; font-size: 1.15rem;'>{pnl_per_lot_str}</span><br>
-                                <span style='color: {pnl_pct_color}; font-size: 0.85rem;'>{pnl_pct_symbol} {abs(pnl_pct):.2f}%</span>
+                            <div>
+                                <h4 class="pr-strategy-title">⚡ Nifty Options Buying Momentum</h4>
+                                <span class="pr-trade-time">{entry_time_str}</span><br>
+                                <span class="pr-strategy-tag">Nifty Options Buying Intraday</span>
                             </div>
                         </div>
-                        <hr style='border-color: #1E293B; margin: 10px 0;'>
-                        <table style='width: 100%; border-collapse: collapse; font-size: 0.9rem;'>
-                            <thead>
-                                <tr style='color: #94A3B8; text-align: left;'>
-                                    <th>Leg</th>
-                                    <th style='text-align: right;'>Entry</th>
-                                    <th style='text-align: right;'>Exit</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr style='color: #F1F5F9;'>
-                                    <td style='color: #00FFCC;'><b>(B)</b> {t['contract']}</td>
-                                    <td style='text-align: right;'>₹ {t['entry_price']:.2f}</td>
-                                    <td style='text-align: right;'>₹ {t['exit_price']:.2f}</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                        <div style='margin-top: 12px; display: flex; justify-content: space-between; align-items: center;'>
-                            {alloc_html}
-                            <span style='color: #94A3B8; font-size: 0.8rem;'>{status_text}</span>
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <div class="pr-trade-pnl-box">
+                                <span class="pr-trade-pnl-lot" style="color: {pnl_pct_color};">{formatted_pnl_lot}</span><br>
+                                <span class="pr-trade-pnl-pct" style="color: {pnl_pct_color};">{pnl_pct_symbol} {abs(pnl_pct):.2f} %</span>
+                            </div>
+                            <div class="pr-about-btn">About Trade</div>
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    <hr style="border: 0; border-top: 1px solid #F1F5F9; margin: 15px 0;">
+                    <table class="pr-legs-table">
+                        <thead>
+                            <tr>
+                                <th>Trade Name</th>
+                                <th style="text-align: right;">Entry</th>
+                                <th style="text-align: right;">Exit</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="color: #334155; font-size: 0.9rem;">
+                                <td style="color: #10B981;"><b>(B)</b> {t['contract']}</td>
+                                <td style="text-align: right; font-family: monospace;">₹{t['entry_price']:.2f}</td>
+                                <td style="text-align: right; font-family: monospace;">₹{t['exit_price']:.2f}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="pr-card-footer">
+                        {alloc_html}
+                        <span class="pr-exit-status">{status_text} at {t['timestamp'].strftime('%I:%M %p')}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
 # ==============================================================================
 # AUTO-REFRESH RE-RUN TRIGGER
