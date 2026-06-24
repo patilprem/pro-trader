@@ -387,6 +387,7 @@ class DhanFeedEngine:
         self.latest_depth: Dict[str, Any] = {}
         self.latest_option_chain: List[Dict[str, Any]] = []
         self.market_closed_override = False
+        self.error_message: Optional[str] = None
 
     def is_market_open_ist(self) -> bool:
         """Helper to determine if the Indian Stock Market is currently open (9:15 AM - 3:30 PM IST, Mon-Fri)."""
@@ -440,9 +441,7 @@ class DhanFeedEngine:
         vwap = 24021.65
         volume = 0.0
         try:
-            q_resp = dhan_rest.get_market_quote(
-                instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
-            )
+            q_resp = dhan_rest.get_market_quote(securities={"IDX_I": [13]})
             if q_resp.get("status") == "success" and "data" in q_resp:
                 spot_data = q_resp["data"].get("13", q_resp["data"].get(13, {}))
                 spot_price = float(spot_data.get("last_price", spot_data.get("lastPrice", 24021.65)))
@@ -474,27 +473,27 @@ class DhanFeedEngine:
             )
             if chain_resp.get("status") == "success" or "data" in chain_resp:
                 data = chain_resp.get("data", chain_resp)
-                chain_list = data.get("option_chain", data.get("optionChain", []))
+                oc_dict = data.get("oc", {})
                 
                 # Clear option chain cache to populate fresh real data
                 self.latest_option_chain = []
                 
-                for item in chain_list:
-                    strike = float(item.get("strike_price", item.get("strikePrice", 0.0)))
+                for strike_str, strike_data in oc_dict.items():
+                    strike = float(strike_str)
                     if strike <= 0:
                         continue
                         
                     # Call details
-                    c_opt = item.get("call_option", item.get("callOption", {}))
-                    c_price = float(c_opt.get("ltp", c_opt.get("lastPrice", 0.0)))
+                    c_opt = strike_data.get("ce", {})
+                    c_price = float(c_opt.get("last_price", c_opt.get("lastPrice", 0.0)))
                     c_oi = float(c_opt.get("oi", c_opt.get("openInterest", 0.0)))
-                    c_vol = float(c_opt.get("volume", 0.0))
+                    c_vol = float(c_opt.get("volume", c_opt.get("volume_traded", 0.0)))
                     
                     # Put details
-                    p_opt = item.get("put_option", item.get("putOption", {}))
-                    p_price = float(p_opt.get("ltp", p_opt.get("lastPrice", 0.0)))
+                    p_opt = strike_data.get("pe", {})
+                    p_price = float(p_opt.get("last_price", p_opt.get("lastPrice", 0.0)))
                     p_oi = float(p_opt.get("oi", p_opt.get("openInterest", 0.0)))
-                    p_vol = float(p_opt.get("volume", 0.0))
+                    p_vol = float(p_opt.get("volume", p_opt.get("volume_traded", 0.0)))
                     
                     # Compute greeks & IV for Call
                     expiry_dt = datetime.datetime.combine(datetime.date.today(), datetime.time(15, 30))
@@ -530,29 +529,23 @@ class DhanFeedEngine:
     def _start_live_feed(self):
         """Starts real connection using dhanhq library."""
         if not DHAN_AVAILABLE:
-            print("[ERROR] DhanHQ SDK is not installed. Reverting to Simulation mode.")
-            config.RUN_MODE = "SIMULATION"
-            self.start()
+            self.error_message = "DhanHQ SDK is not installed. Live feed unavailable."
+            print(f"[ERROR] {self.error_message}")
             return
         
         # Initialize REST client defensively using keyword arguments
         try:
-            dhan_rest = dhan_api(
-                client_id=config.DHAN_CLIENT_ID,
-                access_token=config.DHAN_ACCESS_TOKEN
-            )
-        except TypeError:
             try:
+                dhan_rest = dhan_api(
+                    client_id=config.DHAN_CLIENT_ID,
+                    access_token=config.DHAN_ACCESS_TOKEN
+                )
+            except TypeError:
                 dhan_rest = dhan_api(config.DHAN_CLIENT_ID, config.DHAN_ACCESS_TOKEN)
-            except Exception as e:
-                print(f"[ERROR] Failed to initialize Dhan API client: {e}. Reverting to Simulation mode.")
-                config.RUN_MODE = "SIMULATION"
-                self.start()
-                return
+            self.error_message = None
         except Exception as e:
-            print(f"[ERROR] Failed to initialize Dhan API client: {e}. Reverting to Simulation mode.")
-            config.RUN_MODE = "SIMULATION"
-            self.start()
+            self.error_message = f"Failed to initialize Dhan API client: {e}"
+            print(f"[ERROR] {self.error_message}")
             return
         
         def live_run():
@@ -599,27 +592,29 @@ class DhanFeedEngine:
                         
                     if response.get("status") == "success" or "data" in response:
                         data = response.get("data", response)
-                        chain_data = data.get("option_chain", data.get("optionChain", []))
+                        oc_dict = data.get("oc", {})
                         
                         # Find spot estimate from a quick market quote
                         spot_est = 24021.65
                         try:
-                            q_resp = dhan_rest.get_market_quote(
-                                instruments=[{"exchange_segment": "IDX_I", "security_id": "13"}]
-                            )
+                            q_resp = dhan_rest.get_market_quote(securities={"IDX_I": [13]})
                             if q_resp.get("status") == "success" and "data" in q_resp:
                                 spot_data = q_resp["data"].get("13", q_resp["data"].get(13, {}))
                                 spot_est = float(spot_data.get("last_price", spot_data.get("lastPrice", 24021.65)))
                         except Exception:
                             pass
                             
-                        # Sort by closeness to spot
-                        chain_data.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 24021.65))) - spot_est))
+                        # Sort strikes by closeness to spot
+                        sorted_strikes = sorted(
+                            oc_dict.keys(),
+                            key=lambda x: abs(float(x) - spot_est)
+                        )
                         
                         # Take 8 nearest strikes
-                        for item in chain_data[:8]:
-                            ce_id = item.get("call_option", {}).get("security_id", item.get("callOption", {}).get("securityId"))
-                            pe_id = item.get("put_option", {}).get("security_id", item.get("putOption", {}).get("securityId"))
+                        for strike_str in sorted_strikes[:8]:
+                            strike_data = oc_dict[strike_str]
+                            ce_id = strike_data.get("ce", {}).get("security_id", strike_data.get("ce", {}).get("securityId"))
+                            pe_id = strike_data.get("pe", {}).get("security_id", strike_data.get("pe", {}).get("securityId"))
                             if ce_id:
                                 instruments.append({"exchange_segment": "NSE_FNO", "security_id": str(ce_id)})
                             if pe_id:
@@ -627,6 +622,7 @@ class DhanFeedEngine:
                         print(f"[LIVE] Option chain subscription compiled: {len(instruments) - 1} options added.")
                 except Exception as e:
                     print(f"[LIVE] Option chain query failed: {e}. Subscribing to spot index only.")
+                    self.error_message = f"Option chain query failed: {e}"
 
                 def on_connect(instance):
                     print(f"[LIVE CONNECT] Connected to Dhan Market Feed. Subscribing to {len(instruments)} instruments...")

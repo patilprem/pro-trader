@@ -203,6 +203,8 @@ with col_title:
 with col_sync:
     if router.kill_switch_tripped:
         st.markdown("<div style='text-align: right;'><span class='sync-indicator-red'></span><span style='color:#FF3366;font-weight:bold;'>SYSTEM BLOCKED</span></div>", unsafe_allow_html=True)
+    elif getattr(feed, "error_message", None) is not None and config.RUN_MODE == "LIVE":
+        st.markdown("<div style='text-align: right;'><span class='sync-indicator-red'></span><span style='color:#FF3366;font-weight:bold;'>DHAN ERROR</span></div>", unsafe_allow_html=True)
     elif getattr(feed, "market_closed_override", False) and config.RUN_MODE == "LIVE":
         st.markdown("<div style='text-align: right;'><span class='sync-indicator-green' style='background-color:#FF9800;'></span><span style='color:#FF9800;font-weight:bold;'>DHAN LIVE (CLOSED)</span></div>", unsafe_allow_html=True)
     elif config.RUN_MODE == "SIMULATION":
@@ -214,6 +216,10 @@ with col_sync:
 spot = feed.latest_spot
 depth = feed.latest_depth
 chain = feed.latest_option_chain
+
+# Display error message if live feed failed
+if getattr(feed, "error_message", None) is not None and config.RUN_MODE == "LIVE":
+    st.error(f"❌ Dhan API Error: {feed.error_message}")
 
 # Display warning banner if market closed override is active
 if getattr(feed, "market_closed_override", False):

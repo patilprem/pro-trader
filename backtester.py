@@ -234,18 +234,23 @@ class OptionsBacktester:
             
             if chain_resp.get("status") == "success" or "data" in chain_resp:
                 data = chain_resp.get("data", chain_resp)
-                chain_list = data.get("option_chain", data.get("optionChain", []))
+                oc_dict = data.get("oc", {})
                 
-                # Sort by ATM proximity
-                spot_now = float(closes[-1])
-                chain_list.sort(key=lambda x: abs(float(x.get("strike_price", x.get("strikePrice", 24021.65))) - spot_now))
-                
-                # Select nearest ATM strike
-                atm_item = chain_list[0]
-                strike = float(atm_item.get("strike_price", atm_item.get("strikePrice", 24021.65)))
-                
-                ce_id = atm_item.get("call_option", {}).get("security_id", atm_item.get("callOption", {}).get("securityId"))
-                pe_id = atm_item.get("put_option", {}).get("security_id", atm_item.get("putOption", {}).get("securityId"))
+                if oc_dict:
+                    # Sort strikes by ATM proximity
+                    spot_now = float(closes[-1])
+                    sorted_strikes = sorted(
+                        oc_dict.keys(),
+                        key=lambda x: abs(float(x) - spot_now)
+                    )
+                    
+                    # Select nearest ATM strike
+                    atm_strike_str = sorted_strikes[0]
+                    strike = float(atm_strike_str)
+                    atm_item = oc_dict[atm_strike_str]
+                    
+                    ce_id = atm_item.get("ce", {}).get("security_id", atm_item.get("ce", {}).get("securityId"))
+                    pe_id = atm_item.get("pe", {}).get("security_id", atm_item.get("pe", {}).get("securityId"))
                 
                 # Download Call historical option
                 if ce_id:
